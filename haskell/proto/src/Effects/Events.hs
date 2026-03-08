@@ -599,6 +599,160 @@ instance (HsJSONPB.ToJSON Timeout) where
   toEncoding = HsJSONPB.toAesonEncoding
 instance (HsJSONPB.FromJSON Timeout) where
   parseJSON = HsJSONPB.parseJSONPB
+data SendMessageRequest
+  = SendMessageRequest {sendMessageRequestRecipient :: Hs.Text,
+                        sendMessageRequestContent :: Hs.Text,
+                        sendMessageRequestSummary :: Hs.Text}
+  deriving (Hs.Show, Hs.Eq, Hs.Ord, Hs.Generic)
+instance (Hs.NFData SendMessageRequest)
+instance (HsProtobuf.Named SendMessageRequest) where
+  nameOf _ = Hs.fromString "SendMessageRequest"
+instance (HsProtobuf.HasDefault SendMessageRequest)
+instance (HsProtobuf.Message SendMessageRequest) where
+  encodeMessage
+    _
+    SendMessageRequest {sendMessageRequestRecipient,
+                        sendMessageRequestContent, sendMessageRequestSummary}
+    = Hs.mappend
+        (Hs.mappend
+           (HsProtobuf.encodeMessageField
+              (HsProtobuf.FieldNumber 1)
+              ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text))
+                 sendMessageRequestRecipient))
+           (HsProtobuf.encodeMessageField
+              (HsProtobuf.FieldNumber 2)
+              ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text))
+                 sendMessageRequestContent)))
+        (HsProtobuf.encodeMessageField
+           (HsProtobuf.FieldNumber 3)
+           ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text))
+              sendMessageRequestSummary))
+  decodeMessage _
+    = Hs.pure SendMessageRequest
+        <*>
+          ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+             (HsProtobuf.at
+                HsProtobuf.decodeMessageField (HsProtobuf.FieldNumber 1)))
+        <*>
+          ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+             (HsProtobuf.at
+                HsProtobuf.decodeMessageField (HsProtobuf.FieldNumber 2)))
+        <*>
+          ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+             (HsProtobuf.at
+                HsProtobuf.decodeMessageField (HsProtobuf.FieldNumber 3)))
+  dotProto _
+    = [HsProtobufAST.DotProtoField
+         (HsProtobuf.FieldNumber 1)
+         (HsProtobufAST.Prim HsProtobufAST.String)
+         (HsProtobufAST.Single "recipient") [] "",
+       HsProtobufAST.DotProtoField
+         (HsProtobuf.FieldNumber 2)
+         (HsProtobufAST.Prim HsProtobufAST.String)
+         (HsProtobufAST.Single "content") [] "",
+       HsProtobufAST.DotProtoField
+         (HsProtobuf.FieldNumber 3)
+         (HsProtobufAST.Prim HsProtobufAST.String)
+         (HsProtobufAST.Single "summary") [] ""]
+instance (HsJSONPB.ToJSONPB SendMessageRequest) where
+  toJSONPB (SendMessageRequest f1 f2 f3)
+    = HsJSONPB.object
+        ["recipient"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f1),
+         "content"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f2),
+         "summary"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f3)]
+  toEncodingPB (SendMessageRequest f1 f2 f3)
+    = HsJSONPB.pairs
+        ["recipient"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f1),
+         "content"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f2),
+         "summary"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f3)]
+instance (HsJSONPB.FromJSONPB SendMessageRequest) where
+  parseJSONPB
+    = HsJSONPB.withObject
+        "SendMessageRequest"
+        (\ obj
+           -> Hs.pure SendMessageRequest
+                <*>
+                  ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+                     (obj .: "recipient"))
+                <*>
+                  ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+                     (obj .: "content"))
+                <*>
+                  ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+                     (obj .: "summary")))
+instance (HsJSONPB.ToJSON SendMessageRequest) where
+  toJSON = HsJSONPB.toAesonValue
+  toEncoding = HsJSONPB.toAesonEncoding
+instance (HsJSONPB.FromJSON SendMessageRequest) where
+  parseJSON = HsJSONPB.parseJSONPB
+data SendMessageResponse
+  = SendMessageResponse {sendMessageResponseSuccess :: Hs.Bool,
+                         sendMessageResponseDeliveryMethod :: Hs.Text}
+  deriving (Hs.Show, Hs.Eq, Hs.Ord, Hs.Generic)
+instance (Hs.NFData SendMessageResponse)
+instance (HsProtobuf.Named SendMessageResponse) where
+  nameOf _ = Hs.fromString "SendMessageResponse"
+instance (HsProtobuf.HasDefault SendMessageResponse)
+instance (HsProtobuf.Message SendMessageResponse) where
+  encodeMessage
+    _
+    SendMessageResponse {sendMessageResponseSuccess,
+                         sendMessageResponseDeliveryMethod}
+    = Hs.mappend
+        (HsProtobuf.encodeMessageField
+           (HsProtobuf.FieldNumber 1) sendMessageResponseSuccess)
+        (HsProtobuf.encodeMessageField
+           (HsProtobuf.FieldNumber 2)
+           ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text))
+              sendMessageResponseDeliveryMethod))
+  decodeMessage _
+    = Hs.pure SendMessageResponse
+        <*>
+          HsProtobuf.at
+            HsProtobuf.decodeMessageField (HsProtobuf.FieldNumber 1)
+        <*>
+          ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+             (HsProtobuf.at
+                HsProtobuf.decodeMessageField (HsProtobuf.FieldNumber 2)))
+  dotProto _
+    = [HsProtobufAST.DotProtoField
+         (HsProtobuf.FieldNumber 1) (HsProtobufAST.Prim HsProtobufAST.Bool)
+         (HsProtobufAST.Single "success") [] "",
+       HsProtobufAST.DotProtoField
+         (HsProtobuf.FieldNumber 2)
+         (HsProtobufAST.Prim HsProtobufAST.String)
+         (HsProtobufAST.Single "delivery_method") [] ""]
+instance (HsJSONPB.ToJSONPB SendMessageResponse) where
+  toJSONPB (SendMessageResponse f1 f2)
+    = HsJSONPB.object
+        ["success" .= f1,
+         "delivery_method"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f2)]
+  toEncodingPB (SendMessageResponse f1 f2)
+    = HsJSONPB.pairs
+        ["success" .= f1,
+         "delivery_method"
+           .= ((Hs.coerce @Hs.Text @(HsProtobuf.String Hs.Text)) f2)]
+instance (HsJSONPB.FromJSONPB SendMessageResponse) where
+  parseJSONPB
+    = HsJSONPB.withObject
+        "SendMessageResponse"
+        (\ obj
+           -> Hs.pure SendMessageResponse <*> obj .: "success"
+                <*>
+                  ((HsProtobuf.coerceOver @(HsProtobuf.String Hs.Text) @Hs.Text)
+                     (obj .: "delivery_method")))
+instance (HsJSONPB.ToJSON SendMessageResponse) where
+  toJSON = HsJSONPB.toAesonValue
+  toEncoding = HsJSONPB.toAesonEncoding
+instance (HsJSONPB.FromJSON SendMessageResponse) where
+  parseJSON = HsJSONPB.parseJSONPB
 data NotifyParentRequest
   = NotifyParentRequest {notifyParentRequestStatus :: Hs.Text,
                          notifyParentRequestMessage :: Hs.Text,

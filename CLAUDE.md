@@ -122,17 +122,17 @@ just install-all-dev
 # Or install release build (optimized, slower compile)
 just install-all
 
-# WASM builds (hermetic via nix)
-just wasm-all
+# WASM builds (two equivalent options)
+just wasm-all                     # Build all WASM via nix
+exomonad recompile --role devswarm # Build specific role's WASM via nix
+# Both are standalone CLI commands — neither requires the server to be running.
+# Output: .exo/wasm/wasm-guest-devswarm.wasm
 
 # Rust sidecar only
 cargo build -p exomonad
 
-# Hot reload workflow
-exomonad serve                    # Start server
-# ... edit .exo/roles/devswarm/TLRole.hs ...
-exomonad recompile --role devswarm # Rebuild WASM via nix, copy to .exo/wasm/
-# Next tool call picks up new WASM automatically
+# Hot reload: server checks WASM mtime per tool call, so after recompile
+# the next MCP call picks up the new WASM automatically.
 ```
 
 **What `just install-all-dev` does:**

@@ -40,6 +40,21 @@ message Timeout {
 }
 
 // ============================================================================
+// SendMessage - Send message to another agent
+// ============================================================================
+
+message SendMessageRequest {
+  string recipient = 1;   // target agent name (e.g., "root", "rust-impl-gemini")
+  string content = 2;     // message body
+  string summary = 3;     // brief summary for inbox preview
+}
+
+message SendMessageResponse {
+  bool success = 1;
+  string delivery_method = 2;  // "teams_inbox", "unix_socket", "zellij_stdin", "failed"
+}
+
+// ============================================================================
 // NotifyParent - Notify parent session of worker completion
 // ============================================================================
 
@@ -56,5 +71,6 @@ message NotifyParentResponse {
 service EventEffects {
   rpc WaitForEvent(WaitForEventRequest) returns (WaitForEventResponse);
   rpc NotifyEvent(NotifyEventRequest) returns (NotifyEventResponse);
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
   rpc NotifyParent(NotifyParentRequest) returns (NotifyParentResponse);
 }
