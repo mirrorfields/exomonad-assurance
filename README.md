@@ -5,10 +5,11 @@ Orchestrate heterogeneous LLM agent teams from your CLI.
 ExoMonad lets you spawn and manage teams of LLM agents (Claude + Gemini) directly from a single CLI session. Each agent operates in its own isolated git worktree, performing tasks, filing PRs, and notifying you when they finish—all integrated into your native Claude Code or Gemini CLI conversation.
 
 ## Key Features
-- **Heterogeneous Agents**: Deploy Claude (Opus/3.5 Sonnet) for high-level architecture and Gemini (1.5 Flash/Pro) for fast, focused implementation.
+- **Heterogeneous Agents**: Deploy Claude (Opus) for high-level architecture and Gemini for fast, focused implementation.
 - **Git Worktree Isolation**: Every agent gets its own directory and branch. No merge conflicts while work is in progress.
 - **Native Teams Inbox Delivery**: Child agents notify the parent via Claude Code's Teams inbox. Completion messages arrive as native `<teammate-message>` events — structured, attributed, and delivered through the official Claude Code inbox mechanism. No polling, no stdin hacks, no context switching.
 - **Haskell WASM DSL**: Agent logic and tool definitions are written in Haskell and compiled to WASM. Hot reload by editing a tool and running your next command.
+- **Bidirectional Messaging**: Agents can send messages to each other mid-task — a stuck worker can ask the TL for guidance, and the TL can redirect a running agent without killing it.
 - **Template System**: Reuse verified patterns and anti-patterns across worker specs to save up to 89% on orchestration tokens.
 
 ## Quick Demo
@@ -73,7 +74,9 @@ See [CLAUDE.md](CLAUDE.md) for a deep dive into the system architecture.
 | `spawn_workers` | tl | Spawn Gemini agents as Zellij panes in the current directory. |
 | `file_pr` | tl, dev | Create or update a pull request for the current branch. |
 | `merge_pr` | tl | Merge a child agent's PR and fetch the changes. |
+| `popup` | tl | Show interactive forms in a tiled split pane. |
 | `notify_parent` | all | Signal completion to the parent agent via the Teams inbox. |
+| `send_message` | all | Send a message to another agent (routes via Teams inbox, ACP, UDS, or Zellij). |
 
 ## License
 ExoMonad is released under the [BSD 3-Clause License](LICENSE).
