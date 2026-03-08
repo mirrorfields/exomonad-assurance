@@ -28,6 +28,7 @@ Handles effects in the `events.*` namespace, enabling synchronization between ag
 - **`wait_for_event`**: Internal effect for blocking wait on event types. Not exposed as an MCP tool — parent notification uses Zellij STDIN injection instead.
 - **`notify_event`**: Publishes an event to a session queue.
 - **`notify_parent`**: Signals completion to parent agent. Routes to parent's EventQueue AND injects natural-language notification into parent's Zellij pane via `inject_input`.
+- **`send_message`**: Resolves recipients and delivers arbitrary messages between agents. Routes via Teams inbox, ACP, UDS, or Zellij fallback based on the recipient's type and capabilities.
 
 ### Type Safety
 

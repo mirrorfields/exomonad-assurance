@@ -22,6 +22,7 @@ The guest exports MCP tools that agents can call. These are defined in `ExoMonad
 ### Events Tools (`ExoMonad.Guest.Tools.Events`)
 
 - **`notify_parent`**: Used by worker/subtree agents to signal completion to their parent. Routes to parent via server — delivers as a native `<teammate-message>` through Claude Code's Teams inbox when a team is active, falls back to Zellij STDIN injection otherwise. Available as a bare field in both TL and dev roles.
+- **`send_message`**: Tool for sending arbitrary messages between exomonad-spawned agents.
 
 ### Spawn Tools (`ExoMonad.Guest.Tools.Spawn`)
 
@@ -73,9 +74,9 @@ Pure Haskell prompt assembly for worker/leaf agents. Replaces the former templat
 
 | Role | Tools | Spawned by |
 |------|-------|------------|
-| **tl** | spawn (3), merge_pr, file_pr, popup, notify_parent | `spawn_subtree` |
-| **dev** | file_pr, notify_parent | `spawn_leaf_subtree` |
-| **worker** | notify_parent | `spawn_workers` |
+| **tl** | spawn (3), merge_pr, file_pr, popup, notify_parent, send_message | `spawn_subtree` |
+| **dev** | file_pr, notify_parent, send_message | `spawn_leaf_subtree` |
+| **worker** | notify_parent, send_message | `spawn_workers` |
 
 ## Hooks
 

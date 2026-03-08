@@ -219,6 +219,8 @@ This is **native Claude Code Teams integration**. Messages from child agents arr
 
 **Pipeline:** `notify_parent` → server resolves parent via `TeamRegistry` → `teams_mailbox::write_to_inbox()` → CC InboxPoller → `<teammate-message>` delivered to parent conversation.
 
+**Bidirectional Messaging:** The `send_message` tool enables arbitrary bidirectional messaging between any exomonad-spawned agents, routing via Teams inbox, ACP, UDS, or Zellij fallback depending on the target agent's type and connection status.
+
 **Fallback:** If Teams inbox delivery fails (no team registered, inbox write error), falls back to Zellij STDIN injection via the plugin pipe. The Ink paste problem applies to the fallback path only — see `rust/exomonad-plugin/CLAUDE.md` for details.
 
 ### PR Workflow
@@ -270,7 +272,7 @@ Human in Zellij session
 **Rust = Runtime**
 - Hosts WASM plugin, executes all effects (git, GitHub API, filesystem, Zellij)
 - Owns the process lifecycle
-- MCP server (UDS, started by `exomonad init`)
+- REST server on UDS (started by `exomonad init`), `mcp-stdio` translates MCP JSON-RPC to REST
 
 **Worktrees + Zellij = Isolation/Multiplexing**
 - Git worktrees for code isolation (no Docker containers)
@@ -281,9 +283,12 @@ Human in Zellij session
 
 **MCP Tool Call:**
 ```
-Claude Code → stdio → exomonad mcp-stdio → UDS → exomonad serve → WASM handle_mcp_call
+Claude Code → stdio (JSON-RPC) → exomonad mcp-stdio (translates JSON-RPC → REST)
+→ UDS GET /agents/{role}/{name}/tools (list) or POST /agents/{role}/{name}/tools/call (call)
+→ exomonad serve REST handler → WASM handle_list_tools / handle_mcp_call
 → Haskell dispatches to tool handler → yields effects
 → Rust executes effects via host functions → result returned
+→ mcp-stdio translates REST response → JSON-RPC → stdout → Claude Code
 ```
 
 **Hook Call:**
@@ -317,6 +322,7 @@ All tools implemented in Haskell WASM (`haskell/wasm-guest/src/ExoMonad/Guest/To
 | `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
 | `popup` | tl | Show interactive forms in a tiled split pane via ZellijIpc pipe |
 | `notify_parent` | all | Signal completion to parent. Auto-routed via Teams inbox (primary) or Zellij STDIN (fallback) |
+| `send_message` | all | Send message to another exomonad-spawned agent (routes via Teams inbox, ACP, UDS, or Zellij) |
 
 **Note**: Git operations (`git status`, `git log`, etc.) and GitHub operations (`gh pr list`, etc.) use the Bash tool with `git` and `gh` commands, not MCP tools.
 
@@ -328,22 +334,8 @@ All tools implemented in Haskell WASM (`haskell/wasm-guest/src/ExoMonad/Guest/To
 CLAUDE.md  ← YOU ARE HERE (project overview)
 ├── proto/CLAUDE.md    ← Protocol buffers (FFI boundary types)
 ├── haskell/CLAUDE.md  ← Haskell package organization
-│   ├── dsl/core/CLAUDE.md      ← Graph DSL reference (START HERE for handlers)
-│   ├── effects/CLAUDE.md       ← Effect interpreters
-│   │   ├── env-interpreter/
-│   │   ├── filesystem-interpreter/
-│   │   ├── git-interpreter/
-│   │   ├── github-interpreter/
-│   │   ├── justfile-interpreter/
-│   │   ├── llm-interpreter/
-│   │   ├── observability-interpreter/
-│   │   ├── socket-client/
-│   │   ├── worktree-interpreter/
-│   │   └── zellij-interpreter/
-│   ├── proto/CLAUDE.md         ← Generated Haskell types for proto
-│   ├── protocol/CLAUDE.md      ← Wire formats
-│   ├── tools/CLAUDE.md         ← Dev tools
-│   └── wasm-guest/CLAUDE.md    ← MCP tool definitions (WASM guest logic)
+│   ├── wasm-guest/CLAUDE.md    ← MCP tool definitions (WASM guest logic)
+│   └── proto/CLAUDE.md         ← Generated Haskell types for proto
 ├── rust/CLAUDE.md             ← Rust workspace overview (3 crates)
 │   ├── exomonad/CLAUDE.md  ← MCP server + hook handler (binary)
 │   ├── exomonad-core/CLAUDE.md ← Unified library: framework, handlers, services, protocol, UI types
@@ -364,8 +356,6 @@ CLAUDE.md  ← YOU ARE HERE (project overview)
 | Work with external service clients | `rust/exomonad-core/` (services/external/) |
 | Modify popup UI protocol | `rust/exomonad-core/` (ui_protocol.rs) |
 | Work on Zellij plugin | `rust/exomonad-plugin/CLAUDE.md` |
-| Define a graph, handlers, annotations | `haskell/dsl/core/CLAUDE.md` |
-| Add or modify an effect interpreter | `haskell/effects/CLAUDE.md` |
 | Work on WASM guest (MCP tools) | `haskell/wasm-guest/CLAUDE.md` |
 | Understand architectural decisions | `docs/decisions/` |
 
@@ -377,53 +367,23 @@ CLAUDE.md  ← YOU ARE HERE (project overview)
 
 All Haskell packages live under `haskell/`. See `haskell/CLAUDE.md` for full details.
 
-**Core (`haskell/`):**
 | Package | Purpose |
 |---------|---------|
-| `haskell/dsl/core` | Graph DSL, effects, templates, validation |
-| `haskell/wasm-guest` | WASM guest with MCP tool definitions |
+| `haskell/wasm-guest` | WASM guest with MCP tool definitions (freer-simple) |
 | `haskell/proto` | Generated Haskell proto types |
-
-**Effect Interpreters (`haskell/effects/`):**
-| Package | Purpose |
-|---------|---------|
-| `haskell/effects/llm-interpreter` | Anthropic/OpenAI API calls |
-| `haskell/effects/observability-interpreter` | OpenTelemetry traces to Grafana |
-| `haskell/effects/github-interpreter` | GitHub API integration |
-| `haskell/effects/git-interpreter` | Native git operations |
-| `haskell/effects/worktree-interpreter` | Git worktree management |
-| `haskell/effects/filesystem-interpreter` | Local filesystem access |
-| `haskell/effects/justfile-interpreter` | Justfile execution |
-| `haskell/effects/zellij-interpreter` | Zellij session management |
-| `haskell/effects/env-interpreter` | Environment variable management |
-| `haskell/effects/socket-client` | Shared NDJSON Unix socket client |
-
-**Protocol (`haskell/protocol/`):**
-| Package | Purpose |
-|---------|---------|
-| `haskell/protocol/wire-types` | Native protocol types |
-
-**Tools (`haskell/tools/`):**
-| Package | Purpose |
-|---------|---------|
-| `haskell/tools/training-generator` | Training data types for FunctionGemma |
+| `haskell/vendor/ginger` | Typed Jinja templates (vendored) |
+| `haskell/vendor/freer-simple` | Effect system (vendored, GHC 9.12 patches) |
+| `haskell/vendor/exomonad-pdk` | Extism PDK (vendored) |
+| `haskell/vendor/proto3-runtime` | Protobuf runtime (vendored) |
 
 ### Where Things Go
 
 | Thing | Location |
 |-------|----------|
-| New effect type | `haskell/dsl/core/src/ExoMonad/Effect/Types.hs` |
-| New integration | `haskell/dsl/core/src/ExoMonad/Effects/` (plural) |
-| New graph annotation | `haskell/dsl/core/src/ExoMonad/Graph/Types.hs` |
-| New interpreter | `haskell/effects/<name>-interpreter/` |
-| New MCP tool | `haskell/wasm-guest/src/ExoMonad/Guest/Tools.hs` |
-| Agents (consuming repos) | Separate repo (urchin, etc.) |
-
-### Naming Conventions
-
-- **Effect** (singular) = core infrastructure (`ExoMonad.Effect.*`)
-- **Effects** (plural) = integrations/contrib (`ExoMonad.Effects.*`)
-- **Interpreter** = effect implementation (replaces "executor" terminology)
+| New MCP tool | `haskell/wasm-guest/src/ExoMonad/Guest/Tools/` |
+| New WASM effect | `haskell/wasm-guest/src/ExoMonad/Guest/Effects/` |
+| New Rust effect handler | `rust/exomonad-core/src/handlers/` |
+| New proto type | `proto/` + `rust/exomonad-proto/proto/` |
 
 ### Building & Testing
 
@@ -441,32 +401,9 @@ GitHub Issues. Branch naming: `gh-{number}/{description}`. Reference issue in co
 ### Key Design Decisions
 
 1. **freer-simple for effects** — Reified continuations for WASM yield/resume
-2. **Typed Jinja templates** — Compile-time validation via ginger
-3. **OneOf sum type** — Fully typed dispatch without Dynamic
-4. **IO-blind agents** — All IO in runners, enables WASM + deterministic testing
-5. **Haskell WASM = embedded DSL** — All logic in Haskell, Rust handles I/O only
-
-### Code Smells: Data Flow Dead-Ends
-
-**The `_` prefix is a huge signal.** When you see `_someField` in a pattern match, it means data is being captured but ignored. This is almost always a data flow dead-end that needs fixing.
-
-```haskell
--- BAD: Data captured but ignored
-ImplRequestRetry diagnosis _strategyFrom _strategyTo _failingTests -> do
-  let retryInput = originalInput { iiAttemptCount = count + 1 }
-  pure $ gotoChoice @"v3Impl" retryInput
-
--- GOOD: Data flows to next node
-ImplRequestRetry diagnosis strategyFrom strategyTo failingTests -> do
-  let critiques = buildCritiquesFrom diagnosis strategyFrom strategyTo failingTests
-  let retryInput = originalInput
-        { iiAttemptCount = count + 1
-        , iiCritiqueList = Just critiques  -- Data flows forward
-        }
-  pure $ gotoChoice @"v3Impl" retryInput
-```
-
-When reviewing handlers, grep for `_` prefixes in pattern matches. Each one is a potential bug where exit types capture info that never reaches the next node.
+2. **IO-blind agents** — All IO in Rust runners, enables WASM + deterministic testing
+3. **Haskell WASM = embedded DSL** — All logic in Haskell, Rust handles I/O only
+4. **Single effect tier** — wasm-guest uses freer-simple exclusively; no polysemy
 
 ---
 
@@ -545,62 +482,9 @@ The TL does NOT wake up for intermediate progress, Copilot comments, or partial 
 
 ---
 
-## Agent DSL
-
-ExoMonad is also a library for building LLM agents as typed state machines. Agents live in consuming repos (e.g., urchin). See `haskell/dsl/core/CLAUDE.md` for the full Graph DSL reference.
-
-### Core Concepts
-
-**Graphs** — Agents are typed state machine graphs. Nodes are LLM calls or pure logic. Edges derived from type annotations or explicit `Goto`. Compile-time validation via type families.
-
-```haskell
-data MyAgent mode = MyAgent
-  { entry    :: mode :- Entry Message
-  , classify :: mode :- LLMNode :@ Input Message :@ Schema Intent
-  , route    :: mode :- LogicNode :@ Input Intent :@ UsesEffects [Goto "handle" Message, Goto Exit Response]
-  , handle   :: mode :- LLMNode :@ Input Message :@ Schema Response
-  , exit     :: mode :- Exit Response
-  }
-```
-
-**Effects** — Agents yield effects; runners interpret them: `LLM`, `State s`, `Emit evt`, `RequestInput`, `Log`, `Time`, `Memory s`, `Goto target`.
-
-**Templates** — Jinja with compile-time validation via ginger:
-```haskell
-myTemplate :: TypedTemplate MyContext SourcePos
-myTemplate = $(typedTemplateFile ''MyContext "templates/my_prompt.jinja")
-```
-
-**Agent Turn Loop:**
-1. Build context (State → TemplateContext)
-2. Render template (Jinja → prompt)
-3. Call LLM (prompt + schema + tools → result)
-4. Apply structured output (result → State')
-5. Handle transitions (Goto → next node)
-
-### Consuming Repos
-
-- **urchin** (`~/exomonad-labs/urchin`) — Context generation tooling: `urchin prime` (git/GitHub/LSP context), `urchin lsp` (impact analysis)
-
-### Sleeptime
-
-The evolution pattern for agents: agents run and produce traces → cron jobs in consuming repos observe runs → file issues and PRs to improve the agent (state fields, schemas, templates, tools). ExoMonad provides infrastructure; consuming repos implement the evolution loop.
-
-### LSP Integration
-
-```haskell
-import ExoMonad.Effects.LSP
-import ExoMonad.LSP.Interpreter (withLSPSession, runLSP)
-
-withLSPSession "/path/to/project" $ \session -> do
-  info <- runLSP session $ hover doc pos
-```
-
----
-
 ## References
 
-- [haskell/dsl/core/CLAUDE.md](haskell/dsl/core/CLAUDE.md) — Graph DSL reference
 - [rust/exomonad/CLAUDE.md](rust/exomonad/CLAUDE.md) — MCP server + WASM host
+- [haskell/wasm-guest/CLAUDE.md](haskell/wasm-guest/CLAUDE.md) — MCP tool definitions
 - [freer-simple](https://hackage.haskell.org/package/freer-simple) — Effect system
 - [Anthropic tool use](https://docs.anthropic.com/en/docs/tool-use)

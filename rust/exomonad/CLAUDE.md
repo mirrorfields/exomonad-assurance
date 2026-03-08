@@ -60,7 +60,7 @@ To update WASM, run `just wasm-all` or `exomonad recompile --role devswarm`.
 
 ## MCP Server
 
-The MCP server provides tools via UDS or stdio.
+The server exposes a REST API over UDS. `exomonad mcp-stdio` is a translation layer that speaks MCP JSON-RPC on stdio and converts to REST calls over UDS.
 
 ### Configuration
 
@@ -87,13 +87,22 @@ Register manually in `.mcp.json`:
 | `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
 | `popup` | tl | Interactive UI in Zellij |
 | `notify_parent` | all | Signal completion to parent |
+| `send_message` | all | Send message to another agent (routes via Teams inbox / ACP / UDS / Zellij fallback) |
 
 ### Debugging
 
 You can probe the UDS server using `curl`:
 ```bash
-# Check if server is alive and responding to hooks
-curl --unix-socket .exo/server.sock http://localhost/hook?event=PreToolUse
+# List tools for an agent
+curl --unix-socket .exo/server.sock http://localhost/agents/tl/root/tools
+
+# Call a tool
+curl --unix-socket .exo/server.sock -X POST http://localhost/agents/tl/root/tools/call \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"notify_parent","arguments":{"status":"success","message":"test"}}'
+
+# Check if server is alive
+curl --unix-socket .exo/server.sock http://localhost/health
 ```
 
 
@@ -152,7 +161,37 @@ echo '{"session_id":"test","hook_event_name":"PreToolUse","tool_name":"Write","t
   ./target/debug/exomonad hook pre-tool-use
 ```
 
+## Server Routes
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/health` | GET | Health check |
+| `/hook` | POST | Hook events (pre-tool-use, session-start, etc.) |
+| `/agents/{role}/{name}/tools` | GET | List tools for an agent |
+| `/agents/{role}/{name}/tools/call` | POST | Call a tool (body: `{name, arguments}`) |
+| `/events` | GET | SSE event stream |
+
 ## Data Flow
+
+### MCP Tool Call Flow
+```
+Claude Code → stdio (JSON-RPC) → exomonad mcp-stdio (translates JSON-RPC → REST)
+         ↓
+    UDS GET .exo/server.sock /agents/{role}/{name}/tools        (tools/list)
+    UDS POST .exo/server.sock /agents/{role}/{name}/tools/call  (tools/call)
+         ↓
+    Server: REST handler → WASM handle_list_tools / handle_mcp_call
+         ↓
+    Haskell dispatches to tool handler → yields effects
+         ↓
+    Server executes effects via host functions (in-process)
+         ↓
+    Server returns JSON response
+         ↓
+    mcp-stdio translates REST response → JSON-RPC response → stdout
+         ↓
+    Claude Code receives response
+```
 
 ### Hook Flow
 ```
