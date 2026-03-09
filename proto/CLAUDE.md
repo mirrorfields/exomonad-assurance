@@ -210,7 +210,7 @@ Copilot integration (`copilot.*` namespace):
 Event system (`events.*` namespace):
 - `WaitForEvent`: Block until event occurs
 - `NotifyEvent`: Emit event
-- `NotifyParent`: Signal completion to parent
+- `NotifyParent`: Send message to parent agent
 
 ### effects/file_pr.proto
 

@@ -1791,7 +1791,10 @@ async fn main() -> Result<()> {
                 .context("Cannot find server socket. Is exomonad serve running?")?;
             let client = uds_client::ServerClient::new(socket);
             match client
-                .post_json::<serde_json::Value, serde_json::Value>("/shutdown", &serde_json::json!({}))
+                .post_json::<serde_json::Value, serde_json::Value>(
+                    "/shutdown",
+                    &serde_json::json!({}),
+                )
                 .await
             {
                 Ok(resp) => println!("{}", serde_json::to_string_pretty(&resp)?),

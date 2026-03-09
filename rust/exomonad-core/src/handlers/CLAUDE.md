@@ -27,7 +27,7 @@ Handles effects in the `events.*` namespace, enabling synchronization between ag
 
 - **`wait_for_event`**: Internal effect for blocking wait on event types. Not exposed as an MCP tool — parent notification uses Zellij STDIN injection instead.
 - **`notify_event`**: Publishes an event to a session queue.
-- **`notify_parent`**: Signals completion to parent agent. Delegates to `delivery::notify_parent_delivery()` — the single codepath for all notify_parent operations (event log, EventQueue, formatted notification, multi-channel delivery).
+- **`notify_parent`**: Sends a message to the parent agent. Delegates to `delivery::notify_parent_delivery()` — the single codepath for all notify_parent operations (event log, EventQueue, `[from:]`/`[FAILED:]` formatting, multi-channel delivery).
 - **`send_message`**: Resolves recipients and delivers arbitrary messages between agents. Routes via Teams inbox, ACP, UDS, or Zellij fallback based on the recipient's type and capabilities.
 
 ### Type Safety
@@ -102,10 +102,10 @@ Two abstraction levels — choose the right one:
 
 | Function | When to use |
 |----------|-------------|
-| `notify_parent_delivery()` | Notifying a parent agent (logs, EventQueue, formatted `[CHILD COMPLETE]` msg) |
+| `notify_parent_delivery()` | Notifying a parent agent (logs, EventQueue, `[from: id]`/`[FAILED: id]` prefix) |
 | `deliver_to_agent()` | Peer messaging, sibling notifications, injecting into agent panes |
 
-`notify_parent` effect handler and the poller's `NotifyParentAction` both use `notify_parent_delivery()`. Never use raw `deliver_to_agent()` for parent notifications.
+Both the `notify_parent` effect handler and the poller's `NotifyParentAction` use `notify_parent_delivery()`. All messages get `[from: id]` prefix (or `[FAILED: id]` for failures). Event handler messages include structural tags inside the body (e.g. `[from: leaf-id] [PR READY] PR #5...`). Never use raw `deliver_to_agent()` for parent notifications.
 
 ## Shared Helpers (`handlers/mod.rs`)
 

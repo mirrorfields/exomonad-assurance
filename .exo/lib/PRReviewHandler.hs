@@ -8,11 +8,11 @@ where
 
 import Control.Monad (void)
 import Control.Monad.Freer (Eff)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import ExoMonad.Effects.Log qualified as Log
 import ExoMonad.Guest.Events (CIStatusEvent (..), EventAction (..), EventHandlerConfig (..), PRReviewEvent (..), SiblingMergedEvent (..), defaultEventHandlers)
+import ExoMonad.Guest.Events.Templates qualified as Tpl
 import ExoMonad.Guest.Tool.SuspendEffect (suspendEffect_)
 import ExoMonad.Guest.Types (HookEffects)
 
@@ -34,10 +34,7 @@ prReviewHandler (ReviewReceived n comments_) = do
         "[PRReviewHandler] Review received on PR #" <> T.pack (show n)
     , Log.infoRequestFields = ""
     }
-  let msg = "## Copilot Review on PR #" <> T.pack (show n) <> "\n\n"
-         <> comments_
-         <> "\n\nAddress these comments and push fixes."
-  pure (InjectMessage msg)
+  pure (InjectMessage (Tpl.copilotReviewReceived n comments_))
 
 prReviewHandler (ReviewApproved n) = do
   void $ suspendEffect_ @Log.LogInfo $ Log.InfoRequest
@@ -45,8 +42,7 @@ prReviewHandler (ReviewApproved n) = do
         "[PRReviewHandler] PR #" <> T.pack (show n) <> " approved by Copilot"
     , Log.infoRequestFields = ""
     }
-  let msg = "PR #" <> T.pack (show n) <> " approved by Copilot review"
-  pure (NotifyParentAction msg n)
+  pure (NotifyParentAction (Tpl.prReady n) n)
 
 prReviewHandler (ReviewTimeout n mins) = do
   void $ suspendEffect_ @Log.LogInfo $ Log.InfoRequest
@@ -55,10 +51,7 @@ prReviewHandler (ReviewTimeout n mins) = do
         <> " timed out after " <> T.pack (show mins) <> " minutes"
     , Log.infoRequestFields = ""
     }
-  let msg = "PR #" <> T.pack (show n)
-         <> " — no Copilot review after " <> T.pack (show mins)
-         <> " minutes, proceeding with success"
-  pure (NotifyParentAction msg n)
+  pure (NotifyParentAction (Tpl.reviewTimeout n mins) n)
 
 -- | Handle sibling merged events.
 siblingMergedHandler :: SiblingMergedEvent -> Eff HookEffects EventAction
@@ -68,10 +61,7 @@ siblingMergedHandler (SiblingMergedEvent merged parent _prNum) = do
         "[PRReviewHandler] Sibling branch merged: " <> merged
     , Log.infoRequestFields = ""
     }
-  let msg = "[Sibling Merged] PR on branch " <> merged
-         <> " was merged into " <> parent
-         <> ". Rebase your branch to pick up the changes: git fetch origin && git rebase origin/" <> parent
-  pure (InjectMessage msg)
+  pure (InjectMessage (Tpl.siblingMerged merged parent))
 
 -- | Handle CI status events.
 ciStatusHandler :: CIStatusEvent -> Eff HookEffects EventAction
@@ -82,10 +72,4 @@ ciStatusHandler (CIStatusEvent n status_ branch_) = do
         <> ": " <> status_
     , Log.infoRequestFields = ""
     }
-  let msg = "[CI Status] PR #" <> T.pack (show n) <> " on branch " <> branch_
-         <> ": " <> status_
-         <> case status_ of
-              "success" -> "\n\nCI passed."
-              "failure" -> "\n\nCI failed. Check the logs and fix the issue before proceeding."
-              _ -> ""
-  pure (InjectMessage msg)
+  pure (InjectMessage (Tpl.ciStatus n status_ branch_))

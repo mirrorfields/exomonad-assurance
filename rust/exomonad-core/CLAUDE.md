@@ -55,9 +55,11 @@ Two levels of abstraction for sending messages:
 | Function | Purpose | Used by |
 |----------|---------|---------|
 | `deliver_to_agent()` | Low-level multi-channel delivery (Teams → ACP → UDS → Zellij) | Peer messaging (`send_message`), event handler `InjectMessage` |
-| `notify_parent_delivery()` | High-level parent notification: event log + EventQueue + formatted notification + `deliver_to_agent()` | `EventHandler::notify_parent` (agent-initiated), poller `NotifyParent` action (system-initiated) |
+| `notify_parent_delivery()` | High-level parent notification: event log + EventQueue + `[from: id]`/`[FAILED: id]` prefix + `deliver_to_agent()` | `EventHandler::notify_parent` (agent-initiated), poller `NotifyParent` action (system-initiated) |
 
-**Rule**: Any code path that notifies a parent MUST use `notify_parent_delivery()`, never raw `deliver_to_agent()`. This ensures event log entries, EventQueue publication, and consistent `[CHILD COMPLETE]`/`[CHILD FAILED]` formatting.
+All messages are prefixed with `[from: id]` (or `[FAILED: id]` for failures). Event handler messages include structural tags inside the body (e.g. `[from: leaf-id] [PR READY] PR #5 approved...`).
+
+**Rule**: Any code path that notifies a parent MUST use `notify_parent_delivery()`, never raw `deliver_to_agent()`. This ensures event log entries, EventQueue publication, and consistent `[from:]`/`[FAILED:]` formatting.
 
 `deliver_to_agent()` is correct for peer-to-peer messaging (send_message, event handler InjectMessage).
 
@@ -70,7 +72,7 @@ Background tokio task polling GitHub every 60s. Tracks per-PR state in `HashMap<
 ```
 ReviewState::None ──(Copilot approves)──→ ReviewState::Approved
        │                                         │
-       │                                    auto notify_parent
+       │                                    sends [PR READY] to parent
        │
        ├──(Copilot requests changes)──→ ReviewState::ChangesRequested
        │                                         │
@@ -81,7 +83,7 @@ ReviewState::None ──(Copilot approves)──→ ReviewState::Approved
        │                                    reset → None
        │
        └──(15 min, no review)──→ timeout
-                                    auto notify_parent (one-shot)
+                                    sends [REVIEW TIMEOUT] to parent
 ```
 
 ### Event Dispatch Flow

@@ -338,7 +338,7 @@ All tools implemented in Haskell WASM (`haskell/wasm-guest/src/ExoMonad/Guest/To
 | `file_pr` | tl, dev | Create/update PR (auto-detects base branch from naming) |
 | `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
 | `popup` | tl | Show interactive forms in a tiled split pane via ZellijIpc pipe |
-| `notify_parent` | all | Signal completion to parent. Auto-routed via Teams inbox (primary) or Zellij STDIN (fallback) |
+| `notify_parent` | all | Send message to parent agent. Auto-routed via Teams inbox (primary) or Zellij STDIN (fallback) |
 | `send_message` | all | Send message to another exomonad-spawned agent (routes via Teams inbox, ACP, UDS, or Zellij) |
 
 **Note**: Git operations (`git status`, `git log`, etc.) and GitHub operations (`gh pr list`, etc.) use the Bash tool with `git` and `gh` commands, not MCP tools.
@@ -436,7 +436,7 @@ Claude (Opus) decomposes and dispatches. Gemini implements. Copilot reviews. The
 
 ### Fire-and-Forget Execution
 
-The TL's workflow is: **decompose → spec → spawn → move on**. The TL does not wait, poll, review intermediate output, or re-spec. It spawns all leaves it can, then idles until completion notifications arrive.
+The TL's workflow is: **decompose → spec → spawn → move on**. The TL does not wait, poll, review intermediate output, or re-spec. It spawns all leaves it can, then idles until messages arrive.
 
 **Convergence is leaf + Copilot + event handlers, not TL:**
 1. TL writes spec, spawns leaf (Gemini), returns immediately
@@ -444,12 +444,13 @@ The TL's workflow is: **decompose → spec → spawn → move on**. The TL does 
 3. GitHub poller detects Copilot review comments → fires `handle_event(PRReview::ReviewReceived)` → handler injects comments into leaf's pane
 4. Leaf reads Copilot feedback, fixes, pushes
 5. Copilot re-reviews; loop repeats until clean
-6. Copilot approves → poller fires `handle_event(PRReview::Approved)` → handler auto-calls `notify_parent(success)` → TL gets `<teammate-message>`
-7. TL merges the PR
+6. Copilot approves → poller fires `handle_event(PRReview::Approved)` → handler sends `[PR READY]` to TL
+7. TL sees `[from: leaf-id] [PR READY] PR #N...` → merges the PR
 
 **Alternative paths:**
-- **No Copilot review after 15 minutes** → poller fires `handle_event(PRReview::ReviewTimeout)` → handler auto-calls `notify_parent(success)` with a note about the timeout
-- **Leaf calls `notify_parent` explicitly** → still supported for failure or early completion, but normal success is handled automatically by event handlers
+- **No Copilot review after 15 minutes** → poller fires `handle_event(PRReview::ReviewTimeout)` → handler sends `[REVIEW TIMEOUT]` to TL → TL merges if CI passes
+- **Leaf sends status updates** → `notify_parent` delivers `[from: leaf-id] message` to TL → informational, TL reads but does not auto-merge
+- **Leaf fails** → `notify_parent` with `failure` status → delivers `[FAILED: leaf-id] message` to TL → TL re-decomposes
 
 **Escalation, not iteration.** If a leaf fails after 3+ Copilot rounds, it calls `notify_parent` with `failure` status. The TL then decides: re-decompose, try a different approach, or flag for human intervention. The TL never manually fixes a leaf's code.
 
@@ -462,7 +463,7 @@ Since the TL doesn't iterate on specs, the v1 spec must be production-quality. E
 2. READ FIRST         — Exact files to read (CLAUDE.md, source files, proto files)
 3. STEPS              — Numbered, each step = one concrete action with code snippets
 4. VERIFY             — Exact build/test commands with env vars (PROTOC path, etc.)
-5. DONE CRITERIA      — What "done" looks like (tests pass, PR filed, notify_parent called)
+5. DONE CRITERIA      — What "done" looks like (tests pass, PR filed)
 ```
 
 **Anti-patterns section is mandatory and comes first.** These are known Gemini failure modes — front-load them so the agent reads them before touching code:
@@ -492,9 +493,10 @@ Spawn multiple leaves when tasks are independent (no file conflicts, no ordering
 ### When TL Gets Notified
 
 The TL is idle between spawning and receiving notifications. It wakes up for:
-- **`<teammate-message>`** (Teams inbox, primary) — leaf finished successfully. Delivered as a native Claude Code teammate notification. TL reviews the PR diff, merges, and verifies the merged result builds cleanly. This matters especially when multiple leaves land in parallel — their changes may interact.
-- **`[CHILD COMPLETE: agent-id]`** (Zellij STDIN, fallback) — same as above, used when no team is active. Raw text injected into the TL's pane.
-- **`[CHILD FAILED: agent-id]`** — leaf exhausted retries. TL re-decomposes or escalates.
+- **`[PR READY]`** (event handler, via Teams inbox or Zellij STDIN) — Copilot approved a leaf's PR. TL merges and verifies the result builds cleanly. Multiple leaves landing in parallel may interact.
+- **`[REVIEW TIMEOUT]`** (event handler) — no Copilot review after 15 minutes. TL merges if CI passes.
+- **`[from: agent-id]`** (agent message) — informational update from a leaf. Do not auto-merge; read the message.
+- **`[FAILED: agent-id]`** — leaf exhausted retries. TL re-decomposes or escalates.
 - GitHub poller notifications (CI status, PR merge conflicts).
 
 The TL does NOT wake up for intermediate progress, Copilot comments, or partial results. The convergence loop (leaf + Copilot) runs without TL involvement.

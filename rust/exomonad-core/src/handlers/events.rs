@@ -21,8 +21,6 @@ pub struct EventHandler {
     queue: Arc<EventQueue>,
     /// Event queue scope ID (server-internal UUID, NOT the birth-branch).
     event_queue_scope: String,
-    /// Tracks agents that have already called notify_parent to prevent duplicate notifications.
-    notified_agents: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Claude Teams registry for inbox-based delivery.
     team_registry: Option<Arc<TeamRegistry>>,
     /// ACP connection registry for prompt-based delivery.
@@ -41,7 +39,6 @@ impl EventHandler {
         Self {
             queue,
             event_queue_scope: event_queue_scope.unwrap_or_else(|| "default".to_string()),
-            notified_agents: std::sync::Mutex::new(std::collections::HashSet::new()),
             team_registry: None,
             acp_registry: None,
             event_log: None,
@@ -153,18 +150,6 @@ impl EventEffects for EventHandler {
             (req.agent_id.clone(), "request")
         };
 
-        // Idempotency: ignore duplicate notify_parent calls from spinning agents
-        {
-            let mut set = self
-                .notified_agents
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !set.insert(agent_id_str.clone()) {
-                tracing::warn!(agent_id = %agent_id_str, "notify_parent called again — ignoring duplicate");
-                return Ok(NotifyParentResponse { ack: true });
-            }
-        }
-
         tracing::debug!(
             agent_id = %agent_id_str,
             source = agent_id_source,
@@ -191,7 +176,7 @@ impl EventEffects for EventHandler {
             birth_branch = %birth_branch,
             parent_session_id = %parent_session_id,
             status = %req.status,
-            "notify_parent: routing completion to parent"
+            "notify_parent: routing message to parent"
         );
 
         let tab_name = crate::services::agent_control::resolve_parent_tab_name(ctx);

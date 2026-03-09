@@ -1784,7 +1784,12 @@ impl AgentControlService {
     }
 
     /// Build the common env vars shared by all spawn functions.
-    fn common_spawn_env(&self, internal_name: &str, session_id: &str, role: &str) -> HashMap<String, String> {
+    fn common_spawn_env(
+        &self,
+        internal_name: &str,
+        session_id: &str,
+        role: &str,
+    ) -> HashMap<String, String> {
         let mut env_vars = HashMap::new();
         env_vars.insert("EXOMONAD_AGENT_ID".to_string(), internal_name.to_string());
         env_vars.insert("EXOMONAD_SESSION_ID".to_string(), session_id.to_string());

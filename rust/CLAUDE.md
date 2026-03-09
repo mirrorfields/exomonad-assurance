@@ -170,7 +170,7 @@ All tools are defined in Haskell WASM and executed via host functions.
 | `file_pr` | tl, dev | Create/update PR for current branch (auto-detects base branch from naming) |
 | `merge_pr` | tl | Merge child PR (gh pr merge + git fetch) |
 | `popup` | tl | Show interactive forms in a tiled split pane via ZellijIpc pipe |
-| `notify_parent` | all | Signal completion to parent (auto-routed, injects into parent pane) |
+| `notify_parent` | all | Send message to parent agent (auto-routed via Teams inbox, ACP, or Zellij) |
 
 ## Effect System
 

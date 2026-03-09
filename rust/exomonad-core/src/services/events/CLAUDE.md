@@ -4,7 +4,7 @@ The `EventQueue` service provides zero-polling coordination for parallel workers
 
 ## Purpose
 
-To allow agents (workers) to signal completion or other events to the orchestration layer (TL) without requiring the TL to constantly poll for status. This enables efficient "wait until X happens" workflows.
+To allow agents (workers) to send events to the orchestration layer (TL) without requiring the TL to constantly poll for status. This enables efficient "wait until X happens" workflows.
 
 ## Architecture
 

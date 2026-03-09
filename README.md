@@ -75,7 +75,7 @@ See [CLAUDE.md](CLAUDE.md) for a deep dive into the system architecture.
 | `file_pr` | tl, dev | Create or update a pull request for the current branch. |
 | `merge_pr` | tl | Merge a child agent's PR and fetch the changes. |
 | `popup` | tl | Show interactive forms in a tiled split pane. |
-| `notify_parent` | all | Signal completion to the parent agent via the Teams inbox. |
+| `notify_parent` | all | Send message to the parent agent via the Teams inbox. |
 | `send_message` | all | Send a message to another agent (routes via Teams inbox, ACP, UDS, or Zellij). |
 
 ## License

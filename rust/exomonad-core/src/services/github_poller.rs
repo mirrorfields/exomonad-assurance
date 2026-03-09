@@ -1,11 +1,11 @@
 use crate::domain::PRNumber;
+use crate::plugin_manager::PluginManager;
 use crate::services::acp_registry::AcpRegistry;
 use crate::services::agent_control::AgentType;
 use crate::services::event_log::EventLog;
 use crate::services::event_queue::EventQueue;
 use crate::services::repo;
 use crate::services::team_registry::TeamRegistry;
-use crate::plugin_manager::PluginManager;
 use anyhow::{Context, Result};
 use exomonad_proto::effects::events::{event::EventType, Event, WorkerComplete};
 use serde::Deserialize;
@@ -231,7 +231,8 @@ impl GitHubPoller {
                     .rsplit_once('.')
                     .map(|(parent, _)| parent.to_string())
                     .unwrap_or_else(|| "root".to_string());
-                let parent_tab = if parent_session_id == "root" || !parent_session_id.contains('.') {
+                let parent_tab = if parent_session_id == "root" || !parent_session_id.contains('.')
+                {
                     "TL".to_string()
                 } else {
                     let parent_slug = parent_session_id
@@ -527,9 +528,9 @@ impl GitHubPoller {
             }
 
             // Check for Copilot approval
-            let approved = copilot_reviews
-                .iter()
-                .any(|r| r.state == ReviewState::Approved || r.body.to_lowercase().contains("approved"));
+            let approved = copilot_reviews.iter().any(|r| {
+                r.state == ReviewState::Approved || r.body.to_lowercase().contains("approved")
+            });
             if approved && old_state.last_review_state != ReviewState::Approved {
                 old_state.last_review_state = ReviewState::Approved;
                 old_state.notified_parent_approved = true;

@@ -18,20 +18,11 @@ pub enum DeliveryResult {
 }
 
 /// Format a parent-facing notification message.
-/// "success" → `[CHILD COMPLETE: {id}] {msg}`, "failure" → `[CHILD FAILED: {id}] {msg}`.
+/// "failure" → `[FAILED: {id}] {msg}`, otherwise → `[from: {id}] {msg}`.
 pub fn format_parent_notification(agent_id: &str, status: &str, message: &str) -> String {
     match status {
-        "success" => format!(
-            "[CHILD COMPLETE: {}] {}",
-            agent_id,
-            if message.is_empty() {
-                "Task completed successfully."
-            } else {
-                message
-            }
-        ),
         "failure" => format!(
-            "[CHILD FAILED: {}] {}",
+            "[FAILED: {}] {}",
             agent_id,
             if message.is_empty() {
                 "Task failed."
@@ -39,15 +30,27 @@ pub fn format_parent_notification(agent_id: &str, status: &str, message: &str) -
                 message
             }
         ),
-        _ => format!("[CHILD STATUS: {} - {}] {}", agent_id, status, message),
+        _ => format!(
+            "[from: {}] {}",
+            agent_id,
+            if message.is_empty() {
+                "Status update."
+            } else {
+                message
+            }
+        ),
     }
 }
 
-/// Notify a parent agent that a child completed. Single codepath for all parent notifications.
+/// Notify a parent agent. Single codepath for all parent notifications.
 ///
-/// Pipeline: event log → EventQueue → format `[CHILD COMPLETE/FAILED]` → deliver_to_agent.
+/// Pipeline: event log → EventQueue → format `[from: id]`/`[FAILED: id]` → deliver_to_agent.
 /// Used by both `EventHandler::notify_parent` (agent-initiated) and the poller's
 /// `NotifyParentAction` (system-initiated via event handlers).
+///
+/// All messages are prefixed with `[from: id]` (or `[FAILED: id]` for failures).
+/// Event handler messages include their own structural tags (e.g. `[PR READY]`)
+/// inside the message body, so the TL sees: `[from: leaf-id] [PR READY] PR #5...`
 ///
 /// For peer-to-peer messaging, use `deliver_to_agent()` directly instead.
 pub async fn notify_parent_delivery(
@@ -90,7 +93,7 @@ pub async fn notify_parent_delivery(
 
     // 3. Format and deliver
     let notification = format_parent_notification(agent_id, status, message);
-    let default_summary = format!("Agent completion: {}", agent_id);
+    let default_summary = format!("Agent update: {}", agent_id);
     let summary = summary.unwrap_or(&default_summary);
 
     let delivery_result = deliver_to_agent(
@@ -285,34 +288,31 @@ mod tests {
     #[test]
     fn test_format_parent_notification_success() {
         let msg = format_parent_notification("agent-1", "success", "All done");
-        assert_eq!(msg, "[CHILD COMPLETE: agent-1] All done");
+        assert_eq!(msg, "[from: agent-1] All done");
     }
 
     #[test]
     fn test_format_parent_notification_success_empty() {
         let msg = format_parent_notification("agent-1", "success", "");
-        assert_eq!(
-            msg,
-            "[CHILD COMPLETE: agent-1] Task completed successfully."
-        );
+        assert_eq!(msg, "[from: agent-1] Status update.");
     }
 
     #[test]
     fn test_format_parent_notification_failure() {
         let msg = format_parent_notification("agent-2", "failure", "Something went wrong");
-        assert_eq!(msg, "[CHILD FAILED: agent-2] Something went wrong");
+        assert_eq!(msg, "[FAILED: agent-2] Something went wrong");
     }
 
     #[test]
     fn test_format_parent_notification_failure_empty() {
         let msg = format_parent_notification("agent-2", "failure", "");
-        assert_eq!(msg, "[CHILD FAILED: agent-2] Task failed.");
+        assert_eq!(msg, "[FAILED: agent-2] Task failed.");
     }
 
     #[test]
-    fn test_format_parent_notification_unknown() {
+    fn test_format_parent_notification_other_status() {
         let msg = format_parent_notification("agent-3", "running", "Working...");
-        assert_eq!(msg, "[CHILD STATUS: agent-3 - running] Working...");
+        assert_eq!(msg, "[from: agent-3] Working...");
     }
 
     #[test]

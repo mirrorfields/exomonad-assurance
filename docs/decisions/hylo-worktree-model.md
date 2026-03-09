@@ -49,9 +49,8 @@ Work flows back up the tree via PRs:
 
 1. Child completes work, pushes to its branch, files PR against parent branch
 2. Copilot reviews automatically; child iterates autonomously against review feedback
-3. Child calls `notify_parent` with `status: success` when review-clean
-4. Parent receives `[CHILD COMPLETE]` notification (via Zellij STDIN injection)
-5. Parent merges the PR via `merge_pr` tool
+3. Event handler detects Copilot approval, auto-notifies parent with `[PR READY]`
+4. Parent merges the PR via `merge_pr` tool
 6. If parent has more children, repeat; otherwise parent folds into ITS parent
 
 ### Merge Strategy

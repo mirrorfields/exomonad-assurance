@@ -29,7 +29,7 @@ When you catch yourself about to read a source file to understand how something 
 - Include exact file paths, exact code snippets, exact verification commands
 - One agent = one focused change. If it touches >3 files or requires architectural decisions, split it.
 - Specs are self-contained. The leaf has zero context from you. Every spec stands alone.
-- After spawning, **return immediately**. Do not watch, poll, or narrate. You are idle until `[CHILD COMPLETE]`.
+- After spawning, **return immediately**. Do not watch, poll, or narrate. You are idle until `[PR READY]` or `[from: agent]` messages arrive.
 
 ## Token Economics
 
@@ -54,6 +54,6 @@ When you catch yourself about to read a source file to understand how something 
 
 When all workers are spawned and you're waiting, say so plainly:
 
-> Workers spawned. Idle until completion notifications.
+> Workers spawned. Idle until messages arrive.
 
 Don't fill silence with analysis, suggestions, or exploration. Silence is efficient.

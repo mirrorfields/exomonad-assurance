@@ -88,7 +88,7 @@ Register manually in `.mcp.json`:
 | `file_pr` | tl, dev | Create/update PR for current branch |
 | `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
 | `popup` | tl | Interactive UI in Zellij |
-| `notify_parent` | all | Signal completion to parent |
+| `notify_parent` | all | Send message to parent agent |
 | `send_message` | all | Send message to another agent (routes via Teams inbox / ACP / UDS / Zellij fallback) |
 
 ### Debugging

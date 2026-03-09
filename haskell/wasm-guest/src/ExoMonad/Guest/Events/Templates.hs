@@ -1,92 +1,74 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Event template rendering.
+-- | Centralized message templates for event handler notifications.
 --
--- Renders structured agent events into natural-language messages
--- suitable for injection into Claude Code sessions via Zellij.
--- These messages appear as if a user typed them, so they should
--- be clear, actionable, and parseable by the receiving LLM.
+-- Every structured message that event handlers produce lives here as a typed
+-- function. This makes the message format discoverable and consistent.
+--
+-- These messages are delivered to the parent via @notify_parent_delivery@,
+-- which prepends @[from: agent-id]@ automatically. The structural tags
+-- (@[PR READY]@, @[REVIEW TIMEOUT]@, etc.) are the actionable signal
+-- the TL pattern-matches on.
 module ExoMonad.Guest.Events.Templates
-  ( renderChildComplete,
-    renderPRReady,
-    renderCopilotReview,
-    renderCIStatus,
-    renderQuestionReceived,
+  ( prReady,
+    reviewTimeout,
+    copilotReviewReceived,
+    siblingMerged,
+    ciStatus,
   )
 where
 
 import Data.Text (Text)
 import Data.Text qualified as T
 
--- | Render a child completion event.
+-- | PR approved by Copilot — signals TL to merge.
 --
--- >>> renderChildComplete "wave0-proto" "success" "Proto files created and verified"
--- "[CHILD COMPLETE: wave0-proto] Proto files created and verified. Review their PR or check `get_agent_messages` for details."
-renderChildComplete :: Text -> Text -> Text -> Text
-renderChildComplete agentId status message =
-  case status of
-    "success" ->
-      "[CHILD COMPLETE: "
-        <> agentId
-        <> "] "
-        <> (if T.null message then "Task completed successfully." else message)
-        <> " Review their PR or check `get_agent_messages` for details."
-    "failure" ->
-      "[CHILD FAILED: "
-        <> agentId
-        <> "] "
-        <> (if T.null message then "Task failed." else message)
-        <> " Check their worktree for details."
-    _ ->
-      "[CHILD STATUS: " <> agentId <> " - " <> status <> "] " <> message
+-- >>> prReady 42
+-- "[PR READY] PR #42 approved by Copilot review. Merge with `merge_pr` tool."
+prReady :: Int -> Text
+prReady n =
+  "[PR READY] PR #" <> T.pack (show n)
+    <> " approved by Copilot review. Merge with `merge_pr` tool."
 
--- | Render a PR ready event (Copilot approved, CI green).
-renderPRReady :: Text -> Int -> Text -> Text
-renderPRReady agentId prNumber prUrl =
-  "[PR READY: "
-    <> agentId
-    <> "] PR #"
-    <> T.pack (show prNumber)
-    <> " is ready for review: "
-    <> prUrl
-    <> ". Run `merge_pr"
-    <> T.pack (show prNumber)
-    <> "` to merge."
+-- | No Copilot review within timeout — signals TL to merge if CI passes.
+--
+-- >>> reviewTimeout 42 15
+-- "[REVIEW TIMEOUT] PR #42 \x2014 no Copilot review after 15 minutes. PR is ready to merge if CI passes."
+reviewTimeout :: Int -> Int -> Text
+reviewTimeout n mins =
+  "[REVIEW TIMEOUT] PR #" <> T.pack (show n)
+    <> " \x2014 no Copilot review after " <> T.pack (show mins)
+    <> " minutes. PR is ready to merge if CI passes."
 
--- | Render a Copilot review event.
-renderCopilotReview :: Int -> Int -> Text
-renderCopilotReview prNumber commentCount =
-  if commentCount == 0
-    then "[COPILOT APPROVED] PR #" <> T.pack (show prNumber) <> " passed Copilot review with no comments."
-    else
-      "[COPILOT REVIEW] PR #"
-        <> T.pack (show prNumber)
-        <> " has "
-        <> T.pack (show commentCount)
-        <> " Copilot comment"
-        <> (if commentCount == 1 then "" else "s")
-        <> ". Address them, commit, and push."
+-- | Copilot posted review comments — injected into the agent's pane.
+--
+-- >>> copilotReviewReceived 42 "Fix the typo on line 3."
+-- "## Copilot Review on PR #42\n\nFix the typo on line 3.\n\nAddress these comments and push fixes."
+copilotReviewReceived :: Int -> Text -> Text
+copilotReviewReceived n comments =
+  "## Copilot Review on PR #" <> T.pack (show n) <> "\n\n"
+    <> comments
+    <> "\n\nAddress these comments and push fixes."
 
--- | Render a CI status event.
-renderCIStatus :: Int -> Text -> Text -> Text
-renderCIStatus prNumber status details =
-  case status of
-    "success" -> "[CI GREEN] PR #" <> T.pack (show prNumber) <> " passed all checks."
-    "failure" -> "[CI FAILED] PR #" <> T.pack (show prNumber) <> ": " <> details
-    "pending" -> "[CI PENDING] PR #" <> T.pack (show prNumber) <> " checks are running."
-    _ -> "[CI " <> T.toUpper status <> "] PR #" <> T.pack (show prNumber) <> ": " <> details
+-- | A sibling branch was merged — injected into the agent's pane with rebase instructions.
+--
+-- >>> siblingMerged "main.feature-a" "main"
+-- "[Sibling Merged] PR on branch main.feature-a was merged into main. Rebase your branch to pick up the changes: git fetch origin && git rebase origin/main"
+siblingMerged :: Text -> Text -> Text
+siblingMerged mergedBranch parentBranch =
+  "[Sibling Merged] PR on branch " <> mergedBranch
+    <> " was merged into " <> parentBranch
+    <> ". Rebase your branch to pick up the changes: git fetch origin && git rebase origin/" <> parentBranch
 
--- | Render a question received event (for TL).
-renderQuestionReceived :: Text -> Text -> Text -> Text
-renderQuestionReceived agentId questionId question =
-  "[QUESTION from "
-    <> agentId
-    <> ", q_id="
-    <> questionId
-    <> "] "
-    <> question
-    <> "\nReply with `answer_question agent_id="
-    <> agentId
-    <> " question_id="
-    <> questionId
-    <> " answer=\"...\"` to respond."
+-- | CI status changed — injected into the agent's pane.
+--
+-- >>> ciStatus 42 "success" "main.feature-a"
+-- "[CI Status] PR #42 on branch main.feature-a: success\n\nCI passed."
+ciStatus :: Int -> Text -> Text -> Text
+ciStatus n status branch =
+  "[CI Status] PR #" <> T.pack (show n) <> " on branch " <> branch
+    <> ": " <> status
+    <> case status of
+         "success" -> "\n\nCI passed."
+         "failure" -> "\n\nCI failed. Check the logs and fix the issue before proceeding."
+         _ -> ""

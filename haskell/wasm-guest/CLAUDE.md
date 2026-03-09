@@ -21,7 +21,7 @@ The guest exports MCP tools that agents can call. These are defined in `ExoMonad
 
 ### Events Tools (`ExoMonad.Guest.Tools.Events`)
 
-- **`notify_parent`**: Used by worker/subtree agents to signal completion to their parent. Routes to parent via server — delivers as a native `<teammate-message>` through Claude Code's Teams inbox when a team is active, falls back to Zellij STDIN injection otherwise. Available as a bare field in both TL and dev roles.
+- **`notify_parent`**: Used by worker/subtree agents to send messages to their parent. Routes to parent via server — delivers as a native `<teammate-message>` through Claude Code's Teams inbox when a team is active, falls back to Zellij STDIN injection otherwise. Agent messages get `[from: id]` prefix; failure messages get `[FAILED: id]` prefix. Available as a bare field in both TL and dev roles.
 - **`send_message`**: Tool for sending arbitrary messages between exomonad-spawned agents.
 
 ### Spawn Tools (`ExoMonad.Guest.Tools.Spawn`)
@@ -129,8 +129,8 @@ GitHub poller (Rust, 60s interval)
 | Event | Action | Effect |
 |-------|--------|--------|
 | `ReviewReceived` | `InjectMessage` | Copilot comments injected into agent pane |
-| `ReviewApproved` | `NotifyParentAction` | Auto-notifies parent via `notify_parent_delivery` |
-| `ReviewTimeout` (15 min) | `NotifyParentAction` | Auto-notifies parent with timeout note |
+| `ReviewApproved` | `NotifyParentAction` | Sends `[from: id] [PR READY] PR #N...` to parent via `notify_parent_delivery` |
+| `ReviewTimeout` (15 min) | `NotifyParentAction` | Sends `[from: id] [REVIEW TIMEOUT] PR #N...` to parent via `notify_parent_delivery` |
 | `SiblingMerged` | `InjectMessage` | Injects rebase instructions when a sibling branch is merged |
 
 ### Wiring
