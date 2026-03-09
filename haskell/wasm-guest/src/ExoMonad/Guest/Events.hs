@@ -96,7 +96,7 @@ instance ToJSON SiblingMergedEvent where
 -- | Event handler return type
 data EventAction
   = InjectMessage Text
-  | NotifyParentAction Text Int  -- message, pr_number
+  | NotifyParentAction { naMessage :: Text, naPrNumber :: Int }
   | NoAction
   deriving (Show, Generic)
 

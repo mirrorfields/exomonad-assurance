@@ -38,10 +38,10 @@ struct CopilotComment {
     diff_hunk: Option<String>,
 }
 
-/// A Copilot review with state.
+/// A Copilot review with typed state.
 struct CopilotReview {
     body: String,
-    state: String, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED"
+    state: ReviewState,
 }
 
 /// Branch info discovered from a worktree directory.
@@ -529,7 +529,7 @@ impl GitHubPoller {
             // Check for Copilot approval
             let approved = copilot_reviews
                 .iter()
-                .any(|r| r.state == "APPROVED" || r.body.to_lowercase().contains("approved"));
+                .any(|r| r.state == ReviewState::Approved || r.body.to_lowercase().contains("approved"));
             if approved && old_state.last_review_state != ReviewState::Approved {
                 old_state.last_review_state = ReviewState::Approved;
                 old_state.notified_parent_approved = true;
@@ -553,7 +553,7 @@ impl GitHubPoller {
             // Check for changes_requested
             let changes_requested = copilot_reviews
                 .iter()
-                .any(|r| r.state == "CHANGES_REQUESTED");
+                .any(|r| r.state == ReviewState::ChangesRequested);
             if changes_requested && old_state.last_review_state != ReviewState::ChangesRequested {
                 old_state.last_review_state = ReviewState::ChangesRequested;
                 if let Ok(Some(action)) = self
@@ -694,9 +694,14 @@ impl GitHubPoller {
             if let Ok(reviews) = serde_json::from_slice::<Vec<Review>>(&output_reviews.stdout) {
                 for r in reviews {
                     if r.user.login.to_lowercase().contains("copilot") {
+                        let state = match r.state.as_str() {
+                            "APPROVED" => ReviewState::Approved,
+                            "CHANGES_REQUESTED" => ReviewState::ChangesRequested,
+                            _ => ReviewState::None,
+                        };
                         copilot_reviews.push(CopilotReview {
                             body: r.body.unwrap_or_default(),
-                            state: r.state,
+                            state,
                         });
                     }
                 }
@@ -871,11 +876,11 @@ mod tests {
         let reviews = vec![
             CopilotReview {
                 body: "LGTM!".to_string(),
-                state: "APPROVED".to_string(),
+                state: ReviewState::Approved,
             },
             CopilotReview {
                 body: "Great job.".to_string(),
-                state: "COMMENTED".to_string(),
+                state: ReviewState::None,
             },
         ];
         let msg = poller.format_copilot_message(&[], &reviews);
