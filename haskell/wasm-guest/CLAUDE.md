@@ -86,3 +86,12 @@ The guest handles hooks invoked by Claude Code:
 - **`onPostToolUse`**: Logs tool usage.
 - **`onSubagentStop`**: Validates child agent exit status.
 - **`onSessionEnd`**: Cleans up resources.
+
+## Event Handlers
+
+Third dispatch category alongside tools and hooks. Reactive to world events (GitHub poller, timers).
+
+- **Types** (`ExoMonad.Guest.Events`): `EventHandlerConfig`, `EventAction`, `PRReviewEvent`, `CIStatusEvent`, `TimeoutEvent`, `EventInput`
+- **PR review handler** (`.exo/lib/PRReviewHandler.hs`): On `ReviewReceived` → inject comments into agent pane. On `ReviewApproved` → auto-notify parent. On `ReviewTimeout` (15 min) → auto-notify parent.
+- **Dispatch** (`Main.hs`): `handle_event` FFI export, routes `{ role, event_type, payload }` JSON to the role's `EventHandlerConfig`
+- **Config** (`RoleConfig.eventHandlers`): Per-role event handler configuration. Dev and TL roles use `prReviewEventHandlers`, Worker uses `defaultEventHandlers` (all NoAction).

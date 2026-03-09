@@ -247,7 +247,8 @@ This is **native Claude Code Teams integration**. Messages from child agents arr
 | **ACP messaging** (Gemini agents) | **Built.** Structured JSON-RPC messaging via Agent Client Protocol. `AcpRegistry` manages connections, `connect_and_prompt()` establishes ACP sessions. Delivery priority: Teams inbox → ACP prompt → HTTP-over-UDS → Zellij STDIN. Vendor SDK patched for Send safety. |
 | **HTTP-over-UDS delivery** (Shoal/custom agents) | **Built.** `notify_parent` → POST to `.exo/agents/{name}/notify.sock`. Fire-and-forget with 5s timeout. For custom binary agents that run their own HTTP server on a Unix socket. |
 | **Event router** (Zellij STDIN fallback) | Built. Fallback path: `notify_parent` → `inject_input` into parent pane via Zellij plugin pipe. |
-| **GitHub poller** (PR status → events) | Built. Background service polls PR/CI status and injects notifications into agent panes. |
+| **Event handlers** (WASM dispatch for world events) | **Built.** Third dispatch category alongside tools and hooks. GitHub poller calls `handle_event` on agent's PluginManager when Copilot reviews, approves, or 15-min timeout elapses. Handlers return `EventAction` (InjectMessage, NotifyParent, NoAction). PR review lifecycle is the first handler — auto-notifies parent on approval or timeout. |
+| **GitHub poller** (PR status → events) | Built. Background service polls PR/CI status, fires WASM event handlers, and injects notifications into agent panes. Tracks `first_seen`, `last_review_state`, and `notified_parent_timeout` per PR. |
 | **Event log** (JSONL structured events) | Built. `.exo/events.jsonl` — append-only JSONL. Query with `duckdb -c "SELECT * FROM read_json_auto('.exo/events.jsonl')"` or `jq`. Events: `agent.spawned`, `agent.completed`, `pr.filed`, `pr.merged`, `copilot.review`, `ci.status_changed`. |
 | **Coordination mutexes** | Built. In-memory `MutexRegistry` with FIFO wait queues, TTL auto-expiry, idempotent acquire. Effect-only (`coordination.acquire_mutex`, `coordination.release_mutex`) — no MCP tool exposed. |
 
@@ -312,6 +313,15 @@ Claude Code starts → exomonad hook session-start
 → WASM yields SessionRegister effect with claude_session_id
 → Server stores in ClaudeSessionRegistry
 → spawn_subtree uses this ID for --fork-session
+```
+
+**Event Handler Call:**
+```
+GitHub poller detects world event (Copilot review, CI status, timeout)
+→ Poller resolves agent's PluginManager from plugins map
+→ Calls WASM handle_event with { role, event_type, payload }
+→ Haskell dispatches to EventHandlerConfig handler → returns EventAction
+→ Rust acts on EventAction: InjectMessage (deliver to agent pane) or NotifyParent (deliver to parent)
 ```
 
 **Fail-open:** If the server is unreachable, `exomonad hook` prints `{"continue":true}` and exits 0.
@@ -391,6 +401,7 @@ All Haskell packages live under `haskell/`. See `haskell/CLAUDE.md` for full det
 | New WASM effect | `haskell/wasm-guest/src/ExoMonad/Guest/Effects/` |
 | New Rust effect handler | `rust/exomonad-core/src/handlers/` |
 | New proto type | `proto/` + `rust/exomonad-proto/proto/` |
+| New event handler | `haskell/wasm-guest/src/ExoMonad/Guest/Events.hs` (types), `.exo/lib/` (handlers) |
 
 ### Building & Testing
 
@@ -427,16 +438,18 @@ Claude (Opus) decomposes and dispatches. Gemini implements. Copilot reviews. The
 
 The TL's workflow is: **decompose → spec → spawn → move on**. The TL does not wait, poll, review intermediate output, or re-spec. It spawns all leaves it can, then idles until completion notifications arrive.
 
-**Convergence is leaf + Copilot, not TL:**
+**Convergence is leaf + Copilot + event handlers, not TL:**
 1. TL writes spec, spawns leaf (Gemini), returns immediately
 2. Leaf works → commits → files PR
-3. GitHub poller detects Copilot review comments → injects into leaf's pane
+3. GitHub poller detects Copilot review comments → fires `handle_event(PRReview::ReviewReceived)` → handler injects comments into leaf's pane
 4. Leaf reads Copilot feedback, fixes, pushes
 5. Copilot re-reviews; loop repeats until clean
-6. Leaf calls `notify_parent` with status `success` → TL gets a `<teammate-message>` via Teams inbox (or `[CHILD COMPLETE]` via Zellij fallback if no team is active)
+6. Copilot approves → poller fires `handle_event(PRReview::Approved)` → handler auto-calls `notify_parent(success)` → TL gets `<teammate-message>`
 7. TL merges the PR
 
-**`notify_parent` means DONE** — not "I filed a PR." The leaf owns its quality. The TL only sees finished, review-clean work.
+**Alternative paths:**
+- **No Copilot review after 15 minutes** → poller fires `handle_event(PRReview::ReviewTimeout)` → handler auto-calls `notify_parent(success)` with a note about the timeout
+- **Leaf calls `notify_parent` explicitly** → still supported for failure or early completion, but normal success is handled automatically by event handlers
 
 **Escalation, not iteration.** If a leaf fails after 3+ Copilot rounds, it calls `notify_parent` with `failure` status. The TL then decides: re-decompose, try a different approach, or flag for human intervention. The TL never manually fixes a leaf's code.
 
