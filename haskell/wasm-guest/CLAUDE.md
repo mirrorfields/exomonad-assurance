@@ -85,13 +85,54 @@ The guest handles hooks invoked by Claude Code:
 - **`onPreToolUse`**: Validates tool calls (stops restricted tools).
 - **`onPostToolUse`**: Logs tool usage.
 - **`onSubagentStop`**: Validates child agent exit status.
-- **`onSessionEnd`**: Cleans up resources.
+- **`onStop`**: Stop hook — gates agent exit. Uses `StopCheckResult` (MustBlock/ShouldNudge/Clean).
+
+### Stop Hook State Machine (`ExoMonad.Guest.Effects.StopHook`)
+
+| PR State | Decision | Agent can exit? |
+|----------|----------|----------------|
+| `changes_requested` | **MustBlock** | No — must address review comments |
+| Has comments (not changes_requested) | ShouldNudge | Yes, with nudge |
+| No reviews yet | ShouldNudge | Yes — "system will auto-notify your parent" |
+| Approved | Clean | Yes |
+| No PR, uncommitted work | ShouldNudge | Yes, with nudge |
+| No PR, clean | Clean | Yes |
+| On main/master | Allow | Yes |
 
 ## Event Handlers
 
 Third dispatch category alongside tools and hooks. Reactive to world events (GitHub poller, timers).
 
-- **Types** (`ExoMonad.Guest.Events`): `EventHandlerConfig`, `EventAction`, `PRReviewEvent`, `CIStatusEvent`, `TimeoutEvent`, `EventInput`
-- **PR review handler** (`.exo/lib/PRReviewHandler.hs`): On `ReviewReceived` → inject comments into agent pane. On `ReviewApproved` → auto-notify parent. On `ReviewTimeout` (15 min) → auto-notify parent.
-- **Dispatch** (`Main.hs`): `handle_event` FFI export, routes `{ role, event_type, payload }` JSON to the role's `EventHandlerConfig`
-- **Config** (`RoleConfig.eventHandlers`): Per-role event handler configuration. Dev and TL roles use `prReviewEventHandlers`, Worker uses `defaultEventHandlers` (all NoAction).
+### Architecture
+
+```
+GitHub poller (Rust, 60s interval)
+  → detects state change (new comments, approval, timeout, merge)
+  → calls WASM handle_event({ role, event_type, payload })
+  → Haskell dispatchEvent routes to EventHandlerConfig handler
+  → handler returns EventAction
+  → Rust acts on action (InjectMessage → deliver to agent, NotifyParent → notify_parent_delivery)
+```
+
+### Types (`ExoMonad.Guest.Events`)
+
+| Type | Purpose |
+|------|---------|
+| `EventHandlerConfig` | Per-role handler config: `onPRReview`, `onCIStatus`, `onTimeout` |
+| `EventAction` | Handler return: `InjectMessage Text`, `NotifyParentAction Text Int`, `NoAction` |
+| `PRReviewEvent` | `ReviewReceived` (comments), `ReviewApproved`, `ReviewTimeout` |
+| `EventInput` | Top-level wrapper with `event_type` discriminator for dispatch |
+
+### PR Review Handler (`.exo/lib/PRReviewHandler.hs`)
+
+| Event | Action | Effect |
+|-------|--------|--------|
+| `ReviewReceived` | `InjectMessage` | Copilot comments injected into agent pane |
+| `ReviewApproved` | `NotifyParentAction` | Auto-notifies parent via `notify_parent_delivery` |
+| `ReviewTimeout` (15 min) | `NotifyParentAction` | Auto-notifies parent with timeout note |
+
+### Wiring
+
+- **Dispatch**: `handle_event` FFI export in `Main.hs`, routes `{ role, event_type, payload }` JSON to the role's `EventHandlerConfig`
+- **Config**: Dev and TL roles use `prReviewEventHandlers`, Worker uses `defaultEventHandlers` (all NoAction)
+- **Extensibility**: Add new event types to `EventInput` + new handlers to `EventHandlerConfig`. The poller fires events, WASM decides actions.

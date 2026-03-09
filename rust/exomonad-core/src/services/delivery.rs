@@ -17,6 +17,8 @@ pub enum DeliveryResult {
     Failed,
 }
 
+/// Format a parent-facing notification message.
+/// "success" → `[CHILD COMPLETE: {id}] {msg}`, "failure" → `[CHILD FAILED: {id}] {msg}`.
 pub fn format_parent_notification(agent_id: &str, status: &str, message: &str) -> String {
     match status {
         "success" => format!(
@@ -41,6 +43,13 @@ pub fn format_parent_notification(agent_id: &str, status: &str, message: &str) -
     }
 }
 
+/// Notify a parent agent that a child completed. Single codepath for all parent notifications.
+///
+/// Pipeline: event log → EventQueue → format `[CHILD COMPLETE/FAILED]` → deliver_to_agent.
+/// Used by both `EventHandler::notify_parent` (agent-initiated) and the poller's
+/// `NotifyParentAction` (system-initiated via event handlers).
+///
+/// For peer-to-peer messaging, use `deliver_to_agent()` directly instead.
 pub async fn notify_parent_delivery(
     team_registry: Option<&TeamRegistry>,
     acp_registry: Option<&AcpRegistry>,

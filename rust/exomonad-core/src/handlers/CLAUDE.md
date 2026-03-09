@@ -27,7 +27,7 @@ Handles effects in the `events.*` namespace, enabling synchronization between ag
 
 - **`wait_for_event`**: Internal effect for blocking wait on event types. Not exposed as an MCP tool — parent notification uses Zellij STDIN injection instead.
 - **`notify_event`**: Publishes an event to a session queue.
-- **`notify_parent`**: Signals completion to parent agent. Routes to parent's EventQueue AND injects natural-language notification into parent's Zellij pane via `inject_input`.
+- **`notify_parent`**: Signals completion to parent agent. Delegates to `delivery::notify_parent_delivery()` — the single codepath for all notify_parent operations (event log, EventQueue, formatted notification, multi-channel delivery).
 - **`send_message`**: Resolves recipients and delivers arbitrary messages between agents. Routes via Teams inbox, ACP, UDS, or Zellij fallback based on the recipient's type and capabilities.
 
 ### Type Safety
@@ -95,6 +95,17 @@ Handles effects in the `merge_pr.*` namespace.
 ### Branch Preservation
 
 `gh pr merge` runs WITHOUT `--delete-branch` because worktree branches cannot be deleted while checked out. Branch cleanup happens via `cleanup_merged` instead.
+
+## Delivery Pipeline (`services/delivery.rs`)
+
+Two abstraction levels — choose the right one:
+
+| Function | When to use |
+|----------|-------------|
+| `notify_parent_delivery()` | Notifying a parent agent (logs, EventQueue, formatted `[CHILD COMPLETE]` msg) |
+| `deliver_to_agent()` | Peer messaging, sibling notifications, injecting into agent panes |
+
+`notify_parent` effect handler and the poller's `NotifyParentAction` both use `notify_parent_delivery()`. Never use raw `deliver_to_agent()` for parent notifications.
 
 ## Shared Helpers (`handlers/mod.rs`)
 

@@ -48,6 +48,57 @@ Agent Client Protocol (ACP) provides structured JSON-RPC messaging to Gemini age
 
 **Vendor patches:** `vendor/acp-rust-sdk/` has Send patches (Rc→Arc, LocalBoxFuture→BoxFuture, async_trait(?Send)→async_trait) to work with tokio's multi-threaded runtime.
 
+## Delivery Pipeline (`services/delivery.rs`)
+
+Two levels of abstraction for sending messages:
+
+| Function | Purpose | Used by |
+|----------|---------|---------|
+| `deliver_to_agent()` | Low-level multi-channel delivery (Teams → ACP → UDS → Zellij) | Peer messaging (`send_message`), event handler `InjectMessage`, sibling notifications |
+| `notify_parent_delivery()` | High-level parent notification: event log + EventQueue + formatted notification + `deliver_to_agent()` | `EventHandler::notify_parent` (agent-initiated), poller `NotifyParent` action (system-initiated) |
+
+**Rule**: Any code path that notifies a parent MUST use `notify_parent_delivery()`, never raw `deliver_to_agent()`. This ensures event log entries, EventQueue publication, and consistent `[CHILD COMPLETE]`/`[CHILD FAILED]` formatting.
+
+`deliver_to_agent()` is correct for peer-to-peer messaging (send_message, sibling rebase notifications, event handler InjectMessage).
+
+## GitHub Poller State Machine (`services/github_poller.rs`)
+
+Background tokio task polling GitHub every 60s. Tracks per-PR state in `HashMap<PRNumber, PRState>`.
+
+### PR Lifecycle States
+
+```
+ReviewState::None ──(Copilot approves)──→ ReviewState::Approved
+       │                                         │
+       │                                    auto notify_parent
+       │
+       ├──(Copilot requests changes)──→ ReviewState::ChangesRequested
+       │                                         │
+       │                                    stop hook blocks exit
+       │                                         │
+       │                              (agent pushes, SHA changes)
+       │                                         │
+       │                                    reset → None
+       │
+       └──(15 min, no review)──→ timeout
+                                    auto notify_parent (one-shot)
+```
+
+### Event Dispatch Flow
+
+1. Poller detects state change (new comments, approval, timeout, merge)
+2. Calls `call_handle_event()` → WASM `handle_event` FFI
+3. Haskell `dispatchEvent` routes to role's `EventHandlerConfig` handler
+4. Handler returns `EventAction` (InjectMessage, NotifyParentAction, NoAction)
+5. Poller acts on the action via `handle_event_action()`
+
+### Merge Detection
+
+When a tracked PR's branch disappears from the open PR list, it was merged/closed. The poller:
+- Notifies sibling agents (same parent branch, open PRs) to rebase
+- Logs `agent.sibling_merged` event
+- Removes the PRState from tracking
+
 ## Related Documentation
 
 - [Root CLAUDE.md](../../CLAUDE.md)
