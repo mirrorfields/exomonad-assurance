@@ -8,6 +8,7 @@ module TLRole (config, Tools) where
 
 import ExoMonad
 import ExoMonad.Guest.Effects.StopHook (runStopHookChecks)
+import PRReviewHandler (prReviewEventHandlers)
 import ExoMonad.Guest.Tools.MergePR (MergePR)
 import ExoMonad.Guest.Types (allowResponse)
 import ExoMonad.Types (HookConfig (..), defaultSessionStartHook, teamRegistrationPostToolUse)
@@ -43,5 +44,5 @@ config =
             onSubagentStop = \_ -> runStopHookChecks,
             onSessionStart = defaultSessionStartHook
           },
-      eventHandlers = defaultEventHandlers
+      eventHandlers = prReviewEventHandlers
     }
