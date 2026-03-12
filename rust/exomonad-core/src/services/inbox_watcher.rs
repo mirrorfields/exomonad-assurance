@@ -116,7 +116,7 @@ impl InboxWatcher {
                         let new_count = msgs.len() - state.last_count;
                         info!(member = %member, new_messages = new_count, "InboxWatcher: routing to Zellij");
                         for msg in &msgs[state.last_count..] {
-                            inject_input(&state.zellij_tab_name, &msg.text);
+                            inject_input(&state.zellij_tab_name, None, &msg.text);
                         }
                         state.last_count = msgs.len();
                     }

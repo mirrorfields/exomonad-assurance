@@ -217,12 +217,46 @@ pub async fn deliver_to_agent(
                 message,
                 summary,
             ) {
-                Ok(()) => {
+                Ok(timestamp) => {
                     info!(
                         agent = %agent_key,
                         team = %team_info.team_name,
-                        "Delivered message via Teams inbox"
+                        inbox = %team_info.inbox_name,
+                        timestamp = %timestamp,
+                        "Wrote message to Teams inbox, spawning delivery verifier (30s)"
                     );
+                    // Spawn background task to verify CC's InboxPoller read the message.
+                    // If not read within 30s, fall back to Zellij STDIN injection.
+                    let team_name = team_info.team_name.clone();
+                    let inbox_name = team_info.inbox_name.clone();
+                    let agent = agent_key.to_string();
+                    let tab = zellij_tab_name.to_string();
+                    let msg = message.to_string();
+                    tokio::spawn(async move {
+                        for attempt in 1..=3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            let is_read = teams_mailbox::is_message_read(&team_name, &inbox_name, &timestamp);
+                            info!(
+                                agent = %agent,
+                                team = %team_name,
+                                inbox = %inbox_name,
+                                timestamp = %timestamp,
+                                attempt,
+                                is_read,
+                                "Delivery verifier poll"
+                            );
+                            if is_read {
+                                return;
+                            }
+                        }
+                        warn!(
+                            agent = %agent,
+                            team = %team_name,
+                            tab = %tab,
+                            "Teams inbox message not read after 30s, falling back to Zellij injection"
+                        );
+                        zellij_events::inject_input(&tab, Some(&agent), &msg);
+                    });
                     return DeliveryResult::Teams;
                 }
                 Err(e) => {
@@ -276,12 +310,15 @@ pub async fn deliver_to_agent(
         }
     }
 
+    // For worker agents, agent_key is the worker name which matches their pane title.
+    // Pass it as pane_name so the plugin can target the specific pane within a shared tab.
     debug!(
         tab = %zellij_tab_name,
+        agent = %agent_key,
         chars = message.len(),
         "Injecting message into agent pane via Zellij"
     );
-    zellij_events::inject_input(zellij_tab_name, message);
+    zellij_events::inject_input(zellij_tab_name, Some(agent_key), message);
     DeliveryResult::Zellij
 }
 

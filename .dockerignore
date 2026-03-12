@@ -9,8 +9,21 @@
 !rust/
 rust/**/target/
 
+# Proto definitions (needed by exomonad-proto build.rs)
+!proto/
+
 # Vendored Rust dependencies (acp-rust-sdk)
 !vendor/
 
-# exile-test (bootstrap script + pre-built WASM artifacts)
+# Haskell WASM guest sources
+!haskell/
+!cabal.project.wasm
+!flake.nix
+!flake.lock
+
+# Role definitions + shared lib (needed for WASM build)
+!.exo/roles/
+!.exo/lib/
+
+# try-exomonad (bootstrap script)
 !try-exomonad/

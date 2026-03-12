@@ -1,7 +1,7 @@
 # ==========================================================================
-# Stage 1: Build exomonad binary
+# Stage 1: Build Rust binaries (exomonad + Zellij plugin)
 # ==========================================================================
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.88-bookworm AS rust-builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -16,11 +16,61 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY rust/ rust/
 COPY vendor/ vendor/
+COPY proto/ proto/
 
-RUN cargo build --release -p exomonad
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p exomonad \
+    && cp target/release/exomonad /tmp/exomonad \
+    && rustup target add wasm32-wasip1 \
+    && cd rust/exomonad-plugin \
+    && cargo build --release --target wasm32-wasip1 \
+    && cp target/wasm32-wasip1/release/exomonad-plugin.wasm /tmp/exomonad-plugin.wasm
 
 # ==========================================================================
-# Stage 2: Runtime
+# Stage 2: Build Haskell WASM guest (via nix + GHC WASM cross-compiler)
+# ==========================================================================
+FROM nixos/nix:latest AS wasm-builder
+
+# Enable flakes
+RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+
+WORKDIR /build
+
+# Copy flake first for better caching (flake inputs change rarely)
+COPY flake.nix flake.lock ./
+
+# Prefetch flake inputs (cached unless flake.lock changes)
+RUN --mount=type=cache,target=/nix-cache \
+    cp -r /nix-cache/store/* /nix/store/ 2>/dev/null || true \
+    && nix flake prefetch . \
+    && cp -r /nix/store/* /nix-cache/store/ 2>/dev/null || true
+
+# Copy Haskell sources
+COPY haskell/ haskell/
+COPY .exo/roles/ .exo/roles/
+COPY .exo/lib/ .exo/lib/
+COPY cabal.project.wasm ./
+
+# Build WASM guest
+# Note: nix store cache copy uses || true because the cache dir may be empty.
+# The actual build commands must NOT be swallowed by || true.
+RUN --mount=type=cache,target=/nix-cache \
+    --mount=type=cache,target=/root/.cabal \
+    cp -r /nix-cache/store/* /nix/store/ 2>/dev/null || true \
+    && nix develop .#wasm --command bash -c '\
+        update_ok=false; \
+        for i in 1 2 3; do \
+            wasm32-wasi-cabal update --project-file=cabal.project.wasm hackage.haskell.org && update_ok=true && break; \
+            echo "cabal update attempt $i failed, retrying..."; sleep 5; \
+        done; \
+        $update_ok || { echo "FATAL: cabal update failed after 3 attempts"; exit 1; }; \
+        wasm32-wasi-cabal build --project-file=cabal.project.wasm wasm-guest-devswarm' \
+    && cp $(find dist-newstyle -name "wasm-guest-devswarm.wasm" -type f -print -quit) /tmp/wasm-guest-devswarm.wasm \
+    ; nix_cache_rc=$?; cp -r /nix/store/* /nix-cache/store/ 2>/dev/null || true; exit $nix_cache_rc
+
+# ==========================================================================
+# Stage 3: Runtime
 # ==========================================================================
 FROM ubuntu:24.04
 
@@ -67,18 +117,6 @@ RUN mkdir -p /home/exo/.config/zellij/plugins /tmp/runtime \
     && chown -R exo:exo /home/exo /tmp/runtime
 
 # --------------------------------------------------------------------------
-# exomonad binary from builder
-# --------------------------------------------------------------------------
-COPY --from=builder /build/target/release/exomonad /usr/local/bin/exomonad
-
-# Pre-built WASM artifacts (platform-independent, copied from host by run.sh)
-COPY try-exomonad/artifacts/wasm-guest-devswarm.wasm /opt/exomonad/wasm/
-
-# Bootstrap script
-COPY try-exomonad/bootstrap.sh /usr/local/bin/exomonad-bootstrap
-RUN chmod +x /usr/local/bin/exomonad-bootstrap
-
-# --------------------------------------------------------------------------
 # Environment
 # --------------------------------------------------------------------------
 RUN mkdir -p /workspace && chown exo:exo /workspace
@@ -94,6 +132,18 @@ ENV TERM=xterm-256color
 # ~/.claude/ bind mount from run.sh doesn't clobber the binary.
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/exo/.local/bin:${PATH}"
+
+# --------------------------------------------------------------------------
+# Binaries + artifacts from builder stages
+# --------------------------------------------------------------------------
+USER root
+COPY --from=rust-builder /tmp/exomonad /usr/local/bin/exomonad
+COPY --from=rust-builder /tmp/exomonad-plugin.wasm /home/exo/.config/zellij/plugins/exomonad-plugin.wasm
+COPY --from=wasm-builder /tmp/wasm-guest-devswarm.wasm /opt/exomonad/wasm/
+COPY try-exomonad/bootstrap.sh /usr/local/bin/exomonad-bootstrap
+RUN chmod +x /usr/local/bin/exomonad-bootstrap \
+    && chown exo:exo /home/exo/.config/zellij/plugins/exomonad-plugin.wasm
+USER exo
 
 WORKDIR /workspace
 CMD ["bash"]

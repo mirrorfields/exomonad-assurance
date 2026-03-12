@@ -34,23 +34,17 @@ if [ -f "$HOME/.claude.json" ]; then
     MOUNTS+=(-v "$HOME/.claude.json:/home/exo/.claude.json")
 fi
 
-# ---- Stage WASM artifacts ----
-echo "Staging WASM artifacts..."
-mkdir -p try-exomonad/artifacts
-
-WASM_SRC=".exo/wasm/wasm-guest-devswarm.wasm"
-
-if [ ! -f "$WASM_SRC" ]; then
-    echo "ERROR: Missing artifact: $WASM_SRC" >&2
-    echo "Run 'just install-all-dev' first to build all artifacts." >&2
-    exit 1
-fi
-
-cp "$WASM_SRC" try-exomonad/artifacts/wasm-guest-devswarm.wasm
-
 # ---- Build Docker image ----
 echo "Building Docker image (cached after first run)..."
-docker build -t exomonad-try -f try-exomonad/Dockerfile .
+# Use a BuildKit builder with explicit public DNS (avoids issues with
+# Tailscale/VPN DNS not being available inside BuildKit containers).
+if ! docker buildx inspect exomonad-builder >/dev/null 2>&1; then
+    buildkit_config=$(mktemp)
+    printf '[dns]\n  nameservers = ["1.1.1.1", "8.8.8.8"]\n' > "$buildkit_config"
+    docker buildx create --name exomonad-builder --driver docker-container --config "$buildkit_config"
+    rm "$buildkit_config"
+fi
+docker buildx build --builder exomonad-builder --load -t exomonad-try -f try-exomonad/Dockerfile .
 
 # ---- Launch container ----
 echo "Launching container with $REPO_URL ..."

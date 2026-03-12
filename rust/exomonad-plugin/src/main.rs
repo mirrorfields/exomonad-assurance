@@ -314,6 +314,9 @@ impl ActiveWizard {
 /// Buffered inject-input message awaiting tab/pane state initialization.
 struct PendingInjection {
     tab_name: String,
+    /// Optional pane name for targeting a specific pane (e.g. a worker pane in a shared tab).
+    /// If None, falls back to the first terminal pane in the tab.
+    pane_name: Option<String>,
     text: String,
 }
 
@@ -334,8 +337,10 @@ struct ExoMonadPlugin {
     tab_names: HashMap<usize, String>,
     /// Cached pane manifest from last PaneUpdate event.
     pane_manifest_cache: Option<PaneManifest>,
-    /// Tab name → terminal pane ID mapping, rebuilt when either tab or pane data updates.
+    /// Tab name → first terminal pane ID mapping, rebuilt when either tab or pane data updates.
     tab_pane_map: HashMap<String, u32>,
+    /// Pane title → pane ID mapping, for targeting specific named panes (e.g. worker panes).
+    pane_name_map: HashMap<String, u32>,
     /// This plugin instance's own pane ID (from get_plugin_ids()).
     own_pane_id: u32,
     /// The tab name this plugin instance lives in, derived from PaneManifest correlation.
@@ -492,6 +497,7 @@ impl ExoMonadPlugin {
     /// non-plugin, non-floating, non-exited terminal pane.
     fn rebuild_tab_pane_map(&mut self) {
         self.tab_pane_map.clear();
+        self.pane_name_map.clear();
         self.own_tab_name = None;
         let manifest = match &self.pane_manifest_cache {
             Some(m) => m,
@@ -499,8 +505,13 @@ impl ExoMonadPlugin {
         };
         for (tab_pos, panes) in &manifest.panes {
             if let Some(tab_name) = self.tab_names.get(tab_pos) {
-                if let Some(pane) = panes.iter().find(|p| !p.is_plugin && !p.is_floating && !p.exited) {
-                    self.tab_pane_map.insert(tab_name.clone(), pane.id);
+                for pane in panes.iter().filter(|p| !p.is_plugin && !p.is_floating && !p.exited) {
+                    // First terminal pane per tab is the tab-level target
+                    self.tab_pane_map.entry(tab_name.clone()).or_insert(pane.id);
+                    // All named panes indexed by title for direct targeting
+                    if !pane.title.is_empty() {
+                        self.pane_name_map.insert(pane.title.clone(), pane.id);
+                    }
                 }
                 // Determine which tab this plugin instance lives in
                 if panes.iter().any(|p| p.is_plugin && p.id == self.own_pane_id) {
@@ -511,7 +522,7 @@ impl ExoMonadPlugin {
     }
 
     /// Buffer an inject-input message for later delivery.
-    fn buffer_injection(&mut self, tab_name: String, text: String) {
+    fn buffer_injection(&mut self, tab_name: String, pane_name: Option<String>, text: String) {
         if self.pending_injections.len() >= MAX_PENDING_INJECTIONS {
             eprintln!(
                 "[exomonad-plugin] pending_injections buffer full ({}), dropping oldest",
@@ -519,7 +530,7 @@ impl ExoMonadPlugin {
             );
             self.pending_injections.remove(0);
         }
-        self.pending_injections.push(PendingInjection { tab_name, text });
+        self.pending_injections.push(PendingInjection { tab_name, pane_name, text });
     }
 
     /// Flush buffered inject-input messages now that tab/pane state is available.
@@ -539,20 +550,29 @@ impl ExoMonadPlugin {
                 // Not our tab — another plugin instance will handle it
                 continue;
             }
-            if let Some(&pane_id) = self.tab_pane_map.get(&injection.tab_name) {
+            // Prefer pane-name lookup (for workers sharing a tab), fall back to tab lookup.
+            let pane_id = if let Some(ref pname) = injection.pane_name {
+                self.pane_name_map.get(pname).copied()
+                    .or_else(|| self.tab_pane_map.get(&injection.tab_name).copied())
+            } else {
+                self.tab_pane_map.get(&injection.tab_name).copied()
+            };
+            if let Some(pane_id) = pane_id {
                 eprintln!(
-                    "[exomonad-plugin] flush_pending: injecting {} chars into tab '{}' (pane {})",
+                    "[exomonad-plugin] flush_pending: injecting {} chars into tab '{}' pane {} (target={:?})",
                     injection.text.len(),
                     injection.tab_name,
-                    pane_id
+                    pane_id,
+                    injection.pane_name,
                 );
                 write_chars_to_pane_id(&injection.text, PaneId::Terminal(pane_id));
                 self.pending_enter.push(pane_id);
                 set_timeout(0.1);
             } else {
                 eprintln!(
-                    "[exomonad-plugin] flush_pending: tab '{}' still not in pane map after rebuild, dropping message ({} chars)",
+                    "[exomonad-plugin] flush_pending: tab '{}' pane {:?} not found after rebuild, dropping message ({} chars)",
                     injection.tab_name,
+                    injection.pane_name,
                     injection.text.len()
                 );
             }
@@ -930,6 +950,10 @@ impl ZellijPlugin for ExoMonadPlugin {
                             }
                         };
 
+                        // Optional pane_name for targeting a specific pane within the tab
+                        // (used for worker panes that share a tab with the TL agent).
+                        let pane_name: Option<String> = val["pane_name"].as_str().map(|s| s.to_string());
+
                         // Dedup: only the instance in the target tab should process.
                         // If own_tab_name is not yet set (before first PaneUpdate),
                         // buffer the message for later delivery instead of attempting
@@ -940,13 +964,22 @@ impl ZellijPlugin for ExoMonadPlugin {
                                 // (Unblock pipe below and return)
                             }
                             Some(_) => {
-                                // This is our tab — attempt injection
-                                if let Some(&pane_id) = self.tab_pane_map.get(tab_name) {
+                                // This is our tab — attempt injection.
+                                // Prefer pane-name lookup for targeted delivery (workers),
+                                // fall back to first terminal pane in tab.
+                                let pane_id = if let Some(ref pname) = pane_name {
+                                    self.pane_name_map.get(pname).copied()
+                                        .or_else(|| self.tab_pane_map.get(tab_name).copied())
+                                } else {
+                                    self.tab_pane_map.get(tab_name).copied()
+                                };
+                                if let Some(pane_id) = pane_id {
                                     eprintln!(
-                                        "[exomonad-plugin] inject-input: writing {} chars to tab '{}' (pane {})",
+                                        "[exomonad-plugin] inject-input: writing {} chars to tab '{}' pane {} (target={:?})",
                                         text.len(),
                                         tab_name,
-                                        pane_id
+                                        pane_id,
+                                        pane_name,
                                     );
                                     write_chars_to_pane_id(text, PaneId::Terminal(pane_id));
                                     self.pending_enter.push(pane_id);
@@ -954,11 +987,13 @@ impl ZellijPlugin for ExoMonadPlugin {
                                 } else {
                                     // Tab is ours but pane not found — buffer for retry
                                     eprintln!(
-                                        "[exomonad-plugin] inject-input: tab '{}' is ours but pane not in map ({} entries), buffering",
+                                        "[exomonad-plugin] inject-input: tab '{}' pane {:?} not in map ({} tab entries, {} pane entries), buffering",
                                         tab_name,
-                                        self.tab_pane_map.len()
+                                        pane_name,
+                                        self.tab_pane_map.len(),
+                                        self.pane_name_map.len(),
                                     );
-                                    self.buffer_injection(tab_name.to_string(), text.to_string());
+                                    self.buffer_injection(tab_name.to_string(), pane_name.clone(), text.to_string());
                                 }
                             }
                             None => {
@@ -969,7 +1004,7 @@ impl ZellijPlugin for ExoMonadPlugin {
                                     tab_name,
                                     text.len()
                                 );
-                                self.buffer_injection(tab_name.to_string(), text.to_string());
+                                self.buffer_injection(tab_name.to_string(), pane_name.clone(), text.to_string());
                             }
                         }
                     }

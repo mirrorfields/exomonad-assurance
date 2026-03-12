@@ -44,11 +44,13 @@ pub fn emit_event(session: &str, event: &AgentEvent) -> Result<()> {
 
 /// Inject text into a target pane via the Zellij plugin.
 ///
-/// Sends a JSON payload via direct IPC to the plugin, which resolves
-/// the target pane from the tab name and writes the text as stdin.
+/// `tab_name` identifies which plugin instance handles the message.
+/// `pane_name` optionally targets a specific named pane within the tab
+/// (used for worker panes that share a tab with the TL agent).
+/// Falls back to the first terminal pane in the tab when `pane_name` is None.
 ///
 /// Fire-and-forget: errors are logged, not propagated.
-pub fn inject_input(tab_name: &str, text: &str) {
+pub fn inject_input(tab_name: &str, pane_name: Option<&str>, text: &str) {
     let plugin_path = match crate::layout::resolve_plugin_path() {
         Some(p) => p,
         None => {
@@ -65,15 +67,19 @@ pub fn inject_input(tab_name: &str, text: &str) {
         }
     };
 
-    let payload = serde_json::json!({
+    let mut payload_obj = serde_json::json!({
         "tab_name": tab_name,
         "text": text,
-    })
-    .to_string();
+    });
+    if let Some(pname) = pane_name {
+        payload_obj["pane_name"] = serde_json::Value::String(pname.to_string());
+    }
+    let payload = payload_obj.to_string();
 
     info!(
-        "[ZellijEvents] Injecting input to tab '{}': {} chars",
+        "[ZellijEvents] Injecting input to tab '{}' pane {:?}: {} chars",
         tab_name,
+        pane_name,
         text.len()
     );
 

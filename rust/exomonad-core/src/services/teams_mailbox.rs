@@ -25,13 +25,14 @@ pub struct TeamsMessage {
 /// Appends to the existing JSON array if the file exists, or creates a new array.
 /// Auto-creates the inboxes/ directory (CC lazily initializes it on first SendMessage).
 /// Writes atomically by writing to a temp file and renaming.
+/// Write a message and return its timestamp for delivery verification.
 pub fn write_to_inbox(
     team_name: &str,
     recipient: &str,
     from: &str,
     text: &str,
     summary: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
     let home = dirs::home_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "HOME directory not found")
     })?;
@@ -40,6 +41,7 @@ pub fn write_to_inbox(
 }
 
 /// Write a message to a Claude Teams inbox file at a specific base path.
+/// Returns the timestamp of the written message for delivery verification.
 fn write_to_inbox_at_base(
     base: &Path,
     team_name: &str,
@@ -47,7 +49,7 @@ fn write_to_inbox_at_base(
     from: &str,
     text: &str,
     summary: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
     let inbox_dir = base
         .join(".claude")
         .join("teams")
@@ -73,7 +75,7 @@ fn write_to_inbox_at_base(
         from: from.to_string(),
         text: text.to_string(),
         summary: summary.to_string(),
-        timestamp,
+        timestamp: timestamp.clone(),
         read: false,
     };
     messages.push(new_message);
@@ -96,7 +98,38 @@ fn write_to_inbox_at_base(
 
     debug!(bytes = json.len(), "Teams inbox write complete");
 
-    Ok(())
+    Ok(timestamp)
+}
+
+/// Check if a message with the given timestamp has been marked as read.
+/// Returns true if the message exists and has `read: true`.
+pub fn is_message_read(team_name: &str, recipient: &str, timestamp: &str) -> bool {
+    let Some(path) = inbox_path(team_name, recipient) else {
+        debug!(team = %team_name, recipient, "is_message_read: no inbox path");
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        debug!(team = %team_name, recipient, path = %path.display(), "is_message_read: cannot read inbox file");
+        return false;
+    };
+    let Ok(messages) = serde_json::from_str::<Vec<TeamsMessage>>(&content) else {
+        debug!(team = %team_name, recipient, "is_message_read: cannot parse inbox JSON");
+        return false;
+    };
+    let found = messages.iter().find(|m| m.timestamp == timestamp);
+    match found {
+        Some(m) => m.read,
+        None => {
+            debug!(
+                team = %team_name,
+                recipient,
+                timestamp,
+                total_messages = messages.len(),
+                "is_message_read: message not found in inbox"
+            );
+            false
+        }
+    }
 }
 
 /// Get the Teams inbox file path for a given team and recipient.

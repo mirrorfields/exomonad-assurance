@@ -66,7 +66,7 @@ instance FromJSON SpawnSubtreeArgs where
 instance MCPTool SpawnSubtree where
   type ToolArgs SpawnSubtree = SpawnSubtreeArgs
   toolName = "spawn_subtree"
-  toolDescription = "Fork a Claude agent into its own worktree and Zellij tab. The child gets TL role (can spawn its own children). After spawning, return immediately — you will be notified when the agent sends updates or when Copilot approves their PR. Do not poll or wait. Prefer spawn_leaf_subtree or spawn_workers for implementation work — Gemini agents are highly capable implementers and cost 10-30x less. Spawned agents iterate with Copilot automatically — review comments are injected into their pane and addressed. Do not merge until you receive [PR READY], [FIXES PUSHED], or [REVIEW TIMEOUT] from the event system."
+  toolDescription = "Fork a Claude agent into its own worktree and Zellij tab. The child gets TL role (can spawn its own children). IMPORTANT: You MUST create a team using TeamCreate BEFORE calling any spawn tool — without a team, child agent messages will not be delivered to you. After spawning, return immediately — you will be notified when the agent sends updates or when Copilot approves their PR. Do not poll or wait. Prefer spawn_leaf_subtree or spawn_workers for implementation work — Gemini agents are highly capable implementers and cost 10-30x less."
   toolSchema =
     genericToolSchemaWith @SpawnSubtreeArgs
       [ ("task", "Description of the sub-problem to solve"),
@@ -147,7 +147,7 @@ instance FromJSON SpawnLeafSubtreeArgs where
 instance MCPTool SpawnLeafSubtree where
   type ToolArgs SpawnLeafSubtree = SpawnLeafSubtreeArgs
   toolName = "spawn_leaf_subtree"
-  toolDescription = "Fork a Gemini agent into its own worktree and Zellij tab. Gets dev role (files PR, cannot spawn children). Gemini is a capable implementer — give it acceptance criteria and file paths, not line-by-line instructions. After spawning, return immediately — you will be notified when the agent sends updates or when Copilot approves their PR. After filing a PR, the agent iterates with Copilot automatically — review comments are injected and addressed. Do not merge until you receive [PR READY], [FIXES PUSHED], or [REVIEW TIMEOUT] from the event system."
+  toolDescription = "Fork a Gemini agent into its own worktree and Zellij tab. Gets dev role (files PR, cannot spawn children). Gemini is a capable implementer — give it acceptance criteria and file paths, not line-by-line instructions. IMPORTANT: You MUST create a team using TeamCreate BEFORE calling any spawn tool — without a team, child agent messages will not be delivered to you. After spawning, return immediately — you will be notified when the agent sends updates or when Copilot approves their PR."
   toolSchema =
     genericToolSchemaWith @SpawnLeafSubtreeArgs
       [ ("task", "Description of the sub-problem to solve"),
@@ -271,7 +271,7 @@ instance FromJSON SpawnWorkersArgs where
 instance MCPTool SpawnWorkers where
   type ToolArgs SpawnWorkers = SpawnWorkersArgs
   toolName = "spawn_workers"
-  toolDescription = "Spawn multiple Gemini worker agents in one call. Gemini agents are capable implementers — give them acceptance criteria, key file paths, and anti-patterns, not step-by-step code. Each gets a Zellij pane in YOUR tab, working in YOUR directory on YOUR branch (ephemeral, no isolation, no PR). Workers send messages via notify_parent. After spawning, return immediately — do not poll or wait."
+  toolDescription = "Spawn multiple Gemini worker agents in one call. Gemini agents are capable implementers — give them acceptance criteria, key file paths, and anti-patterns, not step-by-step code. Each gets a Zellij pane in YOUR tab, working in YOUR directory on YOUR branch (ephemeral, no isolation, no PR). Workers send messages via notify_parent. IMPORTANT: You MUST create a team using TeamCreate BEFORE calling any spawn tool — without a team, child agent messages will not be delivered to you. After spawning, return immediately — do not poll or wait."
   toolSchema =
     genericToolSchemaWith @SpawnWorkersArgs
       [ ("specs", "Array of worker specifications")
