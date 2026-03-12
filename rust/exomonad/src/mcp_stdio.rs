@@ -13,7 +13,22 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// Reads JSON-RPC from stdin, translates to REST calls against the server,
 /// writes JSON-RPC responses to stdout.
 pub async fn run(role: &str, name: &str) -> Result<()> {
-    let socket = uds_client::find_server_socket().context("Failed to find server socket")?;
+    // Retry socket discovery — server may still be starting (race with exomonad init)
+    let socket = {
+        let mut attempts = 0;
+        loop {
+            match uds_client::find_server_socket() {
+                Ok(s) => break s,
+                Err(_) => {
+                    attempts += 1;
+                    if attempts >= 30 {
+                        anyhow::bail!("Server socket not found after 15s. Is exomonad serve running?");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    };
     let client = ServerClient::new(socket);
 
     let stdin = tokio::io::stdin();
