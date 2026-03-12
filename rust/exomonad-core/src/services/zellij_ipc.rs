@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use interprocess::local_socket::LocalSocketStream;
+use serde_json;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
@@ -313,11 +314,23 @@ impl ZellijIpc {
     /// Rename the currently focused pane.
     ///
     /// Replaces `zellij action rename-pane <name>`.
-    /// Zellij CLI sends UndoRenamePane first, then PaneNameInput(bytes).
+    /// Routes rename through the plugin to avoid mode-switching corruption.
     pub fn rename_pane(&self, name: &str) -> Result<()> {
         debug!(name = %name, "[ZellijIpc] rename_pane");
-        self.send_action(Action::UndoRenamePane)?;
-        self.send_action(Action::PaneNameInput(name.as_bytes().to_vec()))
+        let plugin_path = crate::layout::resolve_plugin_path()
+            .context("Zellij plugin not found")?;
+
+        let payload = serde_json::json!({
+            "pane_name": name,
+            "new_name": name,
+        })
+        .to_string();
+
+        self.pipe_to_plugin(
+            &plugin_path,
+            crate::ui_protocol::transport::RENAME_PANE_PIPE,
+            &payload,
+        )
     }
 
     /// Query tab names from the Zellij session.

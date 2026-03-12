@@ -1020,6 +1020,51 @@ impl ZellijPlugin for ExoMonadPlugin {
             return true;
         }
 
+        // Handle rename-pane requests: rename a pane by name via its ID.
+        if pipe_message.name == transport::RENAME_PANE_PIPE {
+            if let Some(payload) = pipe_message.payload {
+                match serde_json::from_str::<serde_json::Value>(&payload) {
+                    Ok(val) => {
+                        let pane_name = match val["pane_name"].as_str() {
+                            Some(n) => n,
+                            None => {
+                                eprintln!("[exomonad-plugin] rename-pane: missing 'pane_name' string field");
+                                return true;
+                            }
+                        };
+
+                        let new_name = match val["new_name"].as_str() {
+                            Some(n) => n,
+                            None => {
+                                eprintln!("[exomonad-plugin] rename-pane: missing 'new_name' string field");
+                                return true;
+                            }
+                        };
+
+                        if let Some(pane_id) = self.pane_name_map.get(pane_name) {
+                            eprintln!(
+                                "[exomonad-plugin] rename-pane: renaming pane '{}' (id={}) to '{}'",
+                                pane_name,
+                                pane_id,
+                                new_name
+                            );
+                            rename_pane_with_id(PaneId::Terminal(*pane_id), new_name);
+                        } else {
+                            eprintln!("[exomonad-plugin] rename-pane: pane '{}' not found in map", pane_name);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[exomonad-plugin] rename-pane: invalid JSON: {}", e);
+                    }
+                }
+            }
+            // Unblock CLI pipe if from CLI source
+            if let PipeSource::Cli(id) = &pipe_message.source {
+                unblock_cli_pipe_input(id);
+            }
+            return true;
+        }
+
         // Handle pipe messages from zellij pipe --name exomonad-events
         if pipe_message.name == "exomonad-events" {
             if let Some(payload) = pipe_message.payload {
@@ -1079,6 +1124,9 @@ impl ZellijPlugin for ExoMonadPlugin {
                                 self.status_message = "Ready.".to_string();
                                 should_render = true;
                                 close_self();
+                            }
+                            PluginMessage::RenamePane { .. } => {
+                                // Handled via Pipe message
                             }
                         },
                         Err(e) => {

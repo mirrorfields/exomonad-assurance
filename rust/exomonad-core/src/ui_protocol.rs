@@ -23,6 +23,9 @@ pub mod transport {
 
     /// Pipe name for injecting text input into a target pane via the plugin.
     pub const INJECT_INPUT_PIPE: &str = "exomonad:inject-input";
+
+    /// Pipe name for renaming a pane via the plugin.
+    pub const RENAME_PANE_PIPE: &str = "exomonad:rename-pane";
 }
 
 // ============================================================================

@@ -41,4 +41,9 @@ pub enum PluginMessage {
     },
     #[serde(rename = "close_popup")]
     ClosePopup,
+    #[serde(rename = "rename_pane")]
+    RenamePane {
+        pane_name: String,
+        new_name: String,
+    },
 }

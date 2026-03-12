@@ -83,7 +83,10 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     bash \
     libssl3t64 \
+    libssl-dev \
     libcurl4t64 \
+    pkg-config \
+    build-essential \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
@@ -126,6 +129,11 @@ ENV SHELL=/bin/bash
 ENV HOME=/home/exo
 ENV XDG_RUNTIME_DIR=/tmp/runtime
 ENV TERM=xterm-256color
+
+# Rust toolchain via rustup (installed as exo user so cargo is in ~/.cargo/bin)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/home/exo/.cargo/bin:${PATH}"
 
 # Claude Code (native installer — npm package is deprecated)
 # Installs to ~/.local/bin/claude (outside ~/.claude/), so the full
