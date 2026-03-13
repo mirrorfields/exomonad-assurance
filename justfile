@@ -6,21 +6,21 @@ default:
 
 # Format all code (Haskell + Rust)
 fmt:
-    cd haskell && ormolu --mode inplace --ghc-opt -XImportQualifiedPost $(find . -name '*.hs' -not -path './vendor/*')
+    nix develop --command bash -c 'cd haskell && ormolu --mode inplace --ghc-opt -XImportQualifiedPost $(find . -name "*.hs" -not -path "./vendor/*")'
     cargo fmt --all
 
 # Check formatting (no changes, exit 1 if unformatted)
 fmt-check:
-    cd haskell && ormolu --mode check --ghc-opt -XImportQualifiedPost $(find . -name '*.hs' -not -path './vendor/*')
+    nix develop --command bash -c 'cd haskell && ormolu --mode check --ghc-opt -XImportQualifiedPost $(find . -name "*.hs" -not -path "./vendor/*")'
     cargo fmt --all --check
 
 # Lint Haskell code
 lint:
-    hlint haskell
+    nix develop --command hlint haskell
 
 # Run all tests
 test:
-    cabal test all
+    nix develop --command cabal test all
     cargo test --workspace
 
 # Run fast tests only (Rust unit tests)
@@ -123,10 +123,10 @@ install-all: (_install "release")
 # Install everything (fast dev build)
 install-all-dev: (_install "dev")
 
-# Regenerate Haskell proto types (requires nix develop shell)
+# Regenerate Haskell proto types
 # Generated files are checked in - only run when protos change
 proto-gen-haskell:
-    ./proto-codegen/generate.sh
+    nix develop --command ./proto-codegen/generate.sh
 
 # Regenerate Rust proto types (part of normal cargo build)
 proto-gen-rust:
@@ -143,9 +143,9 @@ proto-test:
     echo ">>> Running Rust proto wire format tests..."
     cargo test -p exomonad-proto
     echo ">>> Running Haskell proto tests..."
-    cabal test exomonad-proto || echo "No tests defined yet"
+    nix develop --command cabal test exomonad-proto || echo "No tests defined yet"
     echo ">>> Running proto wire format compatibility test..."
-    cabal run proto-test || echo "Wire format test not yet implemented"
+    nix develop --command cabal run proto-test || echo "Wire format test not yet implemented"
     echo ">>> Done"
 
 # Run MCP integration tests (starts server, runs tests, cleans up)
