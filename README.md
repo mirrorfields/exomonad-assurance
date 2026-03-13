@@ -4,6 +4,8 @@ ExoMonad stitches frontier model binaries together into reconfigurable agent swa
 
 All orchestration logic — tool dispatch, hooks, event handling, PR review routing — is defined in Haskell effects executed by a shared Rust server. Agents run in Zellij tabs and panes, isolated via git worktrees. No Docker, no web dashboard, no new UI to learn.
 
+![Zellij devswarm — TL dispatching to three Gemini workers in parallel, each in its own worktree. Bottom panes show workers mid-execution.](img/exomonad_zellij_devswarm.png)
+
 ## Install
 
 Requires [Nix](https://nixos.org/) and [Zellij](https://zellij.dev/).
