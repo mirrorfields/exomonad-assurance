@@ -248,20 +248,18 @@ handleWorkerExit hookInput = do
     case maybeAgentId of
       Just agentId -> do
         let actualStatus = fromMaybe "success" (hiExitStatus hookInput)
-        case actualStatus of
-          "success" ->
-            void $ suspendEffect_ @LogInfo (Log.InfoRequest { Log.infoRequestMessage = TL.fromStrict ("Worker " <> agentId <> " exited cleanly, no notify_parent (redundant)"), Log.infoRequestFields = "" })
-          other -> do
-            let statusMsg = "Worker " <> agentId <> " exited with status: " <> other
-            res <- suspendEffect @Events.EventsNotifyParent
-                    (ProtoEvents.NotifyParentRequest
-                      { ProtoEvents.notifyParentRequestAgentId = TL.fromStrict agentId,
-                        ProtoEvents.notifyParentRequestStatus = TL.fromStrict "failure",
-                        ProtoEvents.notifyParentRequestMessage = TL.fromStrict statusMsg
-                      })
-            case res of
-              Left err -> void $ suspendEffect_ @LogError (Log.ErrorRequest { Log.errorRequestMessage = TL.fromStrict ("Failed to notify failure to parent: " <> T.pack (show err)), Log.errorRequestFields = "" })
-              Right _ -> void $ suspendEffect_ @LogInfo (Log.InfoRequest { Log.infoRequestMessage = TL.fromStrict ("Failure notified for " <> agentId), Log.infoRequestFields = "" })
+        let (status, statusMsg) = case actualStatus of
+              "success" -> ("success", agentId <> " is idle")
+              other -> ("failure", "Worker " <> agentId <> " exited with status: " <> other)
+        res <- suspendEffect @Events.EventsNotifyParent
+                (ProtoEvents.NotifyParentRequest
+                  { ProtoEvents.notifyParentRequestAgentId = TL.fromStrict agentId,
+                    ProtoEvents.notifyParentRequestStatus = TL.fromStrict status,
+                    ProtoEvents.notifyParentRequestMessage = TL.fromStrict statusMsg
+                  })
+        case res of
+          Left err -> void $ suspendEffect_ @LogError (Log.ErrorRequest { Log.errorRequestMessage = TL.fromStrict ("Failed to notify parent: " <> T.pack (show err)), Log.errorRequestFields = "" })
+          Right _ -> void $ suspendEffect_ @LogInfo (Log.InfoRequest { Log.infoRequestMessage = TL.fromStrict ("Exit notified for " <> agentId <> " (" <> status <> ")"), Log.infoRequestFields = "" })
       Nothing -> do
         void $ suspendEffect_ @LogError (Log.ErrorRequest { Log.errorRequestMessage = "agent_id missing from hook input", Log.errorRequestFields = "" })
     pure (allowResponse Nothing)
