@@ -41,7 +41,6 @@ async fn build_test_runtime() -> exomonad_core::Runtime {
         .with_effect_handler(MockFsHandler)
         .with_effect_handler(MockFilePRHandler)
         .with_effect_handler(MockMergePRHandler)
-        .with_effect_handler(MockPopupHandler)
         .with_effect_handler(MockEventsHandler)
         .with_effect_handler(MockSessionHandler)
         .with_effect_handler(MockKvHandler)
@@ -220,7 +219,7 @@ impl EffectHandler for MockAgentHandler {
                     agent_type: 1,
                     role: 1,
                     status: 1,
-                    zellij_tab: "test-subtree".into(),
+                    mux_window: "test-subtree".into(),
                     error: String::new(),
                     pr_number: 0,
                     pr_url: String::new(),
@@ -237,7 +236,7 @@ impl EffectHandler for MockAgentHandler {
                     agent_type: 2,
                     role: 2,
                     status: 1,
-                    zellij_tab: "test-leaf".into(),
+                    mux_window: "test-leaf".into(),
                     error: String::new(),
                     pr_number: 0,
                     pr_url: String::new(),
@@ -254,7 +253,7 @@ impl EffectHandler for MockAgentHandler {
                     agent_type: 2,
                     role: 0,
                     status: 1,
-                    zellij_tab: "test-worker".into(),
+                    mux_window: "test-worker".into(),
                     error: String::new(),
                     pr_number: 0,
                     pr_url: String::new(),
@@ -361,33 +360,6 @@ impl EffectHandler for MockMergePRHandler {
             _ => Err(EffectError::not_found(format!(
                 "mock_merge_pr/{effect_type}"
             ))),
-        }
-    }
-}
-
-struct MockPopupHandler;
-
-#[async_trait]
-impl EffectHandler for MockPopupHandler {
-    fn namespace(&self) -> &str {
-        "popup"
-    }
-
-    async fn handle(
-        &self,
-        effect_type: &str,
-        _payload: &[u8],
-        _ctx: &exomonad_core::effects::EffectContext,
-    ) -> EffectResult<Vec<u8>> {
-        use exomonad_proto::effects::popup::*;
-
-        match effect_type {
-            "popup.show_popup" => Ok(ShowPopupResponse {
-                button: "submit".into(),
-                values: b"{}".to_vec(),
-            }
-            .encode_to_vec()),
-            _ => Err(EffectError::not_found(format!("mock_popup/{effect_type}"))),
         }
     }
 }
@@ -857,7 +829,7 @@ async fn wasm_effect_handler_error_propagates() {
         ) -> EffectResult<Vec<u8>> {
             Err(EffectError::custom(
                 "spawn_failed",
-                "Zellij session not found",
+                "tmux session not found",
             ))
         }
     }
@@ -889,7 +861,7 @@ async fn wasm_effect_handler_error_propagates() {
     // Verify the error message propagated
     let error_msg = output["error"].as_str().unwrap_or_default();
     assert!(
-        error_msg.contains("spawn_failed") || error_msg.contains("Zellij session"),
+        error_msg.contains("spawn_failed") || error_msg.contains("tmux session"),
         "Error message should contain handler error info, got: {error_msg}"
     );
 }

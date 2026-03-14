@@ -252,7 +252,7 @@ mod binary {
                 agent_type: 1, // CLAUDE
                 role: 1,       // DEV
                 status: 1,     // RUNNING
-                zellij_tab: "433-fix-build".into(),
+                mux_window: "433-fix-build".into(),
                 error: String::new(),
                 pr_number: 0,
                 pr_url: String::new(),
@@ -274,7 +274,7 @@ mod binary {
         assert_eq!(agent.agent_type, 1);
         assert_eq!(agent.role, 1);
         assert_eq!(agent.status, 1);
-        assert_eq!(agent.zellij_tab, "433-fix-build");
+        assert_eq!(agent.mux_window, "433-fix-build");
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod binary {
                     agent_type: 1,
                     role: 1,
                     status: 1,
-                    zellij_tab: "1-a".into(),
+                    mux_window: "1-a".into(),
                     error: String::new(),
                     pr_number: 0,
                     pr_url: String::new(),
@@ -305,7 +305,7 @@ mod binary {
                     agent_type: 2, // GEMINI
                     role: 1,
                     status: 1,
-                    zellij_tab: "2-b".into(),
+                    mux_window: "2-b".into(),
                     error: String::new(),
                     pr_number: 0,
                     pr_url: String::new(),
@@ -337,7 +337,7 @@ mod binary {
                 agent_type: 1,
                 role: 2,   // TL
                 status: 2, // STOPPED
-                zellij_tab: String::new(),
+                mux_window: String::new(),
                 error: String::new(),
                 pr_number: 42,
                 pr_url: "https://github.com/org/repo/pull/42".into(),
@@ -783,7 +783,7 @@ mod binary {
                 agent_type: 1,
                 role: 1,
                 status: 1,
-                zellij_tab: "t".into(),
+                mux_window: "t".into(),
                 error: String::new(),
                 pr_number: 0,
                 pr_url: String::new(),
@@ -842,7 +842,7 @@ mod binary {
                 agent_type: 1,
                 role: 1,
                 status: 1,
-                zellij_tab: "1-a".into(),
+                mux_window: "1-a".into(),
                 error: String::new(),
                 pr_number: 0,
                 pr_url: String::new(),
@@ -1196,7 +1196,7 @@ mod json_full {
             agent_type: 1,
             role: 2,
             status: 1,
-            zellij_tab: "42-feature-x".into(),
+            mux_window: "42-feature-x".into(),
             error: String::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
@@ -1216,67 +1216,6 @@ mod json_full {
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: WorktreeInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, parsed);
-    }
-
-    // ========================================================================
-    // Popup types (JSON wire format)
-    // ========================================================================
-
-    #[test]
-    fn popup_definition_json_roundtrip() {
-        use exomonad_proto::popup::{PopupComponent, PopupDefinition, TextInput, popup_component};
-
-        let original = PopupDefinition {
-            id: "popup-1".into(),
-            title: "Enter details".into(),
-            components: vec![PopupComponent {
-                id: "name-input".into(),
-                component: Some(popup_component::Component::TextInput(TextInput {
-                    label: "Name".into(),
-                    placeholder: "Enter your name".into(),
-                    default_value: String::new(),
-                    required: true,
-                    max_length: 100,
-                })),
-            }],
-            submit_label: "Submit".into(),
-            cancel_label: "Cancel".into(),
-        };
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: PopupDefinition = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, parsed);
-    }
-
-    #[test]
-    fn form_submission_json_roundtrip() {
-        use exomonad_proto::popup::FormSubmission;
-        use std::collections::HashMap;
-
-        let mut values = HashMap::new();
-        values.insert("name-input".to_string(), "Alice".to_string());
-        values.insert("email-input".to_string(), "alice@example.com".to_string());
-
-        let original = FormSubmission {
-            popup_id: "popup-1".into(),
-            values,
-            cancelled: false,
-        };
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: FormSubmission = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, parsed);
-    }
-
-    #[test]
-    fn popup_error_json_roundtrip() {
-        use exomonad_proto::popup::PopupError;
-
-        let original = PopupError {
-            message: "Invalid input".into(),
-            component_id: "name-input".into(),
-        };
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: PopupError = serde_json::from_str(&json).unwrap();
         assert_eq!(original, parsed);
     }
 }

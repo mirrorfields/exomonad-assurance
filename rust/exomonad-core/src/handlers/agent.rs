@@ -461,7 +461,7 @@ impl AgentEffects for AgentHandler {
             agent_type: AgentType::Gemini as i32,
             role: 0,
             status: AgentStatus::Running as i32,
-            zellij_tab: String::new(),
+            mux_window: String::new(),
             error: String::new(),
             pr_number: 0,
             pr_url: String::new(),
@@ -566,11 +566,24 @@ impl AgentEffects for AgentHandler {
         _req: CloseSelfRequest,
         ctx: &crate::effects::EffectContext,
     ) -> EffectResult<CloseSelfResponse> {
-        let slug_key = format!("{}/{}", ctx.birth_branch, ctx.agent_name);
+        let agent_key = ctx.agent_name.to_string();
+        let routing_path = std::path::Path::new(".exo/agents").join(&agent_key).join("routing.json");
 
-        crate::services::zellij_events::close_worker_pane(&slug_key);
+        let pane_target = if let Ok(content) = std::fs::read_to_string(&routing_path) {
+            serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|r| r["pane_id"].as_str().map(String::from))
+        } else {
+            None
+        };
 
-        info!(slug_key = %slug_key, "Agent requested self-closure");
+        if let Some(pane_id) = &pane_target {
+            crate::services::tmux_events::close_worker_pane(pane_id);
+        } else {
+            warn!(agent = %ctx.agent_name, "No pane_id in routing.json, cannot close pane");
+        }
+
+        info!(agent = %ctx.agent_name, pane = ?pane_target, "Agent requested self-closure");
 
         Ok(CloseSelfResponse {
             success: true,
@@ -593,7 +606,7 @@ fn spawn_result_to_proto(
         agent_type: service_agent_type_to_proto(result.agent_type),
         role: 0,
         status: AgentStatus::Running as i32,
-        zellij_tab: result.tab_name.clone(),
+        mux_window: result.tab_name.clone(),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -615,7 +628,7 @@ fn teammate_result_to_proto(
         agent_type: service_agent_type_to_proto(result.agent_type),
         role: 0,
         status: AgentStatus::Running as i32,
-        zellij_tab: result.agent_type.tab_display_name(name),
+        mux_window: result.agent_type.tab_display_name(name),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -637,7 +650,7 @@ fn worker_result_to_proto(
         agent_type: AgentType::Gemini as i32,
         role: 0,
         status: AgentStatus::Running as i32,
-        zellij_tab: ServiceAgentType::Gemini.tab_display_name(name),
+        mux_window: ServiceAgentType::Gemini.tab_display_name(name),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -659,7 +672,7 @@ fn subtree_result_to_proto(
         agent_type: service_agent_type_to_proto(result.agent_type),
         role: 0,
         status: AgentStatus::Running as i32,
-        zellij_tab: result.agent_type.tab_display_name(branch_name),
+        mux_window: result.agent_type.tab_display_name(branch_name),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -681,7 +694,7 @@ fn leaf_subtree_result_to_proto(
         agent_type: service_agent_type_to_proto(result.agent_type),
         role: 0,
         status: AgentStatus::Running as i32,
-        zellij_tab: result.agent_type.tab_display_name(branch_name),
+        mux_window: result.agent_type.tab_display_name(branch_name),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -722,7 +735,7 @@ fn service_info_to_proto(info: &AgentInfo) -> exomonad_proto::effects::agent::Ag
         agent_type,
         role: 0,
         status,
-        zellij_tab: String::new(),
+        mux_window: String::new(),
         error: String::new(),
         pr_number: info.pr.as_ref().map(|p| p.number as i32).unwrap_or(0),
         pr_url: info.pr.as_ref().map(|p| p.url.clone()).unwrap_or_default(),

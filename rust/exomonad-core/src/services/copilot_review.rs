@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
-use super::zellij_events;
+use super::tmux_events;
 
 // ============================================================================
 // Types
@@ -210,8 +210,8 @@ pub async fn wait_for_copilot_review(
         if !comments.is_empty() {
             info!("[CopilotReview] Found {} Copilot comments", comments.len());
 
-            // Emit copilot:reviewed event (only if in Zellij session)
-            if let Ok(session) = std::env::var("ZELLIJ_SESSION_NAME") {
+            // Emit copilot:reviewed event (only if in tmux session)
+            if let Ok(session) = std::env::var("EXOMONAD_TMUX_SESSION") {
                 if let Ok(branch) = git::get_current_branch() {
                     if let Some(agent_id_str) = git::extract_agent_id(&branch) {
                         match crate::ui_protocol::AgentId::try_from(agent_id_str) {
@@ -219,9 +219,9 @@ pub async fn wait_for_copilot_review(
                                 let event = crate::ui_protocol::AgentEvent::CopilotReviewed {
                                     agent_id,
                                     comment_count: comments.len() as u32,
-                                    timestamp: zellij_events::now_iso8601(),
+                                    timestamp: tmux_events::now_iso8601(),
                                 };
-                                if let Err(e) = zellij_events::emit_event(&session, &event) {
+                                if let Err(e) = tmux_events::emit_event(&session, &event) {
                                     warn!("Failed to emit copilot:reviewed event: {}", e);
                                 }
                             }
@@ -246,8 +246,8 @@ pub async fn wait_for_copilot_review(
         if fetch_pr_reviews(&owner, &repo, input.pr_number).await? {
             info!("[CopilotReview] Found Copilot review (no inline comments)");
 
-            // Emit copilot:reviewed event with 0 comments (only if in Zellij session)
-            if let Ok(session) = std::env::var("ZELLIJ_SESSION_NAME") {
+            // Emit copilot:reviewed event with 0 comments (only if in tmux session)
+            if let Ok(session) = std::env::var("EXOMONAD_TMUX_SESSION") {
                 if let Ok(branch) = git::get_current_branch() {
                     if let Some(agent_id_str) = git::extract_agent_id(&branch) {
                         match crate::ui_protocol::AgentId::try_from(agent_id_str) {
@@ -255,9 +255,9 @@ pub async fn wait_for_copilot_review(
                                 let event = crate::ui_protocol::AgentEvent::CopilotReviewed {
                                     agent_id,
                                     comment_count: 0,
-                                    timestamp: zellij_events::now_iso8601(),
+                                    timestamp: tmux_events::now_iso8601(),
                                 };
-                                if let Err(e) = zellij_events::emit_event(&session, &event) {
+                                if let Err(e) = tmux_events::emit_event(&session, &event) {
                                     warn!("Failed to emit copilot:reviewed event: {}", e);
                                 }
                             }

@@ -1,6 +1,6 @@
 # exomonad-core — Unified Library
 
-ExoMonad core is the unified library providing the effect system framework, WASM hosting via Extism, and built-in effect handlers and services for git, GitHub, agent orchestration, and more. It defines the FFI boundary using protobuf and provides a lightweight UI protocol for frontend plugins.
+ExoMonad core is the unified library providing the effect system framework, WASM hosting via Extism, and built-in effect handlers and services for git, GitHub, agent orchestration, and more. It defines the FFI boundary using protobuf.
 
 ## Module Structure
 
@@ -38,13 +38,13 @@ Without `runtime`: only `ui_protocol` module available. Used by `exomonad-plugin
 
 ## ACP Integration
 
-Agent Client Protocol (ACP) provides structured JSON-RPC messaging to Gemini agents, replacing fragile Zellij STDIN injection.
+Agent Client Protocol (ACP) provides structured JSON-RPC messaging to Gemini agents, replacing fragile tmux STDIN injection.
 
 **Key files:**
 - `services/acp_registry.rs` — `AcpRegistry` (connection store) + `connect_and_prompt()` (spawn + handshake + first prompt)
 - `services/acp_client.rs` — `ExoMonadAcpClient` (implements ACP `Client` trait: auto-approve permissions, log notifications)
 
-**Delivery priority** (in `services/delivery.rs`): Teams inbox → ACP prompt → HTTP-over-UDS (`.exo/agents/{name}/notify.sock`) → Zellij STDIN injection.
+**Delivery priority** (in `services/delivery.rs`): Teams inbox → ACP prompt → HTTP-over-UDS (`.exo/agents/{name}/notify.sock`) → tmux STDIN injection.
 
 **Vendor patches:** `vendor/acp-rust-sdk/` has Send patches (Rc→Arc, LocalBoxFuture→BoxFuture, async_trait(?Send)→async_trait) to work with tokio's multi-threaded runtime.
 
@@ -54,10 +54,10 @@ Two levels of abstraction for sending messages:
 
 | Function | Purpose | Used by |
 |----------|---------|---------|
-| `deliver_to_agent()` | Low-level multi-channel delivery (Teams → ACP → UDS → Zellij) | Peer messaging (`send_message`), event handler `InjectMessage` |
+| `deliver_to_agent()` | Low-level multi-channel delivery (Teams → ACP → UDS → tmux) | Peer messaging (`send_message`), event handler `InjectMessage` |
 | `notify_parent_delivery()` | High-level parent notification: event log + EventQueue + `[from: id]`/`[FAILED: id]` prefix + `deliver_to_agent()` | `EventHandler::notify_parent` (agent-initiated), poller `NotifyParent` action (system-initiated) |
 
-**Worker pane delivery** (Zellij fallback for workers): `routing.json` stores `slug_key` (e.g. `"main/test-worker-gemini"`) rather than `pane_name`. The plugin maps `slug_key → pane_id` at spawn time via `REGISTER_PANE_PIPE`, surviving Gemini CLI's pane rename. `inject_input` passes `slug_key` as the `pane_name` argument; the plugin checks `slug_pane_map` before `pane_name_map`.
+**Worker pane delivery** (tmux fallback for workers): `routing.json` stores `pane_id` (e.g. `%42`) for direct tmux targeting. `inject_input` passes `pane_id` as the `target` argument.
 
 All messages are prefixed with `[from: id]` (or `[FAILED: id]` for failures). Event handler messages include structural tags inside the body (e.g. `[from: leaf-id] [PR READY] PR #5 approved...`).
 
