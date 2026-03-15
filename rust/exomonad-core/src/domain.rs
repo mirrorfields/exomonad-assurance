@@ -7,6 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::{Path, PathBuf};
+
+#[cfg(feature = "runtime")]
+use anyhow::Result;
+#[cfg(feature = "runtime")]
+use tokio::fs;
 
 // ============================================================================
 // Error Types
@@ -143,17 +149,26 @@ validated_string!(
 
 impl BirthBranch {
     /// Root TL birth-branch from the current git branch.
-    /// Detects the branch via `git rev-parse --abbrev-ref HEAD`, falls back to "main".
-    pub fn root() -> Self {
-        let branch = std::process::Command::new("git")
+    /// Returns an error if git is not available or HEAD is detached.
+    pub fn root() -> std::result::Result<Self, anyhow::Error> {
+        let output = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|b| !b.is_empty() && b != "HEAD")
-            .unwrap_or_else(|| "main".to_string());
-        Self(branch)
+            .map_err(|e| anyhow::anyhow!("Failed to execute git rev-parse: {}", e))?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "git rev-parse failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch.is_empty() || branch == "HEAD" {
+            anyhow::bail!("HEAD is detached or branch name is empty");
+        }
+
+        Ok(Self(branch))
     }
 
     /// Depth in the agent tree (0 = root TL, 1 = first subtree, etc.).
@@ -567,8 +582,6 @@ impl fmt::Display for ReviewState {
 // Path Types
 // ============================================================================
 
-use std::path::{Path, PathBuf};
-
 /// Path validation errors.
 #[derive(Debug, thiserror::Error)]
 pub enum PathError {
@@ -638,6 +651,48 @@ pub struct AgentPermissions {
     pub deny: Vec<String>,
     /// Permission mode override (e.g., "dontAsk" for deny-by-default).
     pub default_mode: Option<String>,
+}
+
+/// Typed routing configuration for agent message delivery and cleanup.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RoutingInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_tab: Option<String>,
+}
+
+impl RoutingInfo {
+    pub fn window(window_id: &str) -> Self {
+        Self {
+            window_id: Some(window_id.to_string()),
+            pane_id: None,
+            parent_tab: None,
+        }
+    }
+
+    pub fn pane(pane_id: &str, parent_tab: &str) -> Self {
+        Self {
+            window_id: None,
+            pane_id: Some(pane_id.to_string()),
+            parent_tab: Some(parent_tab.to_string()),
+        }
+    }
+
+    #[cfg(feature = "runtime")]
+    pub async fn write_to_dir(&self, dir: &Path) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(dir.join("routing.json"), json).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "runtime")]
+    pub async fn read_from_dir(dir: &Path) -> Result<Self> {
+        let content = fs::read_to_string(dir.join("routing.json")).await?;
+        Ok(serde_json::from_str(&content)?)
+    }
 }
 
 // ============================================================================
@@ -797,6 +852,30 @@ mod tests {
         let json = serde_json::to_string(&permission).unwrap();
         let deserialized: ToolPermission = serde_json::from_str(&json).unwrap();
         assert_eq!(permission, deserialized);
+    }
+
+    #[test]
+    fn test_routing_info_serde() {
+        // Window routing
+        let routing = RoutingInfo::window("@123");
+        assert_eq!(routing.window_id.as_deref(), Some("@123"));
+        assert_eq!(routing.pane_id, None);
+        assert_eq!(routing.parent_tab, None);
+
+        let json = serde_json::to_string(&routing).unwrap();
+        assert!(json.contains("\"window_id\":\"@123\""));
+        assert!(!json.contains("\"pane_id\""));
+
+        // Pane routing
+        let routing = RoutingInfo::pane("%456", "main-claude");
+        assert_eq!(routing.window_id, None);
+        assert_eq!(routing.pane_id.as_deref(), Some("%456"));
+        assert_eq!(routing.parent_tab.as_deref(), Some("main-claude"));
+
+        let json = serde_json::to_string(&routing).unwrap();
+        assert!(json.contains("\"pane_id\":\"%456\""));
+        assert!(json.contains("\"parent_tab\":\"main-claude\""));
+        assert!(!json.contains("\"window_id\""));
     }
 
     #[test]
