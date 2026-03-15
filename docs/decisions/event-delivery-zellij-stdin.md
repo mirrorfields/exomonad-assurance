@@ -56,7 +56,7 @@ Implicit from spawn. The branch hierarchy (`main.feature.auth` → parent `main.
 - **Delivery helper**: `services/delivery.rs` — shared Teams+Zellij delivery
 - **Event handler**: `handlers/events.rs` — `notify_parent` calls `deliver_to_agent()`
 - **GitHub poller**: `services/github_poller.rs` — PR/CI notifications call `deliver_to_agent()`
-- **Event log**: `.exo/events.jsonl` — append-only JSONL (durable record, independent of delivery)
+- **Event log**: `.exo/logs/{agent_id}.jsonl` — per-agent append-only JSONL (durable record, independent of delivery)
 
 ## Consequences
 
