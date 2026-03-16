@@ -243,7 +243,7 @@ This is **native Claude Code Teams integration**. Messages from child agents arr
 | **GitHub poller** (PR status → events) | Built. Background service polls PR/CI status, fires WASM event handlers, and injects notifications into agent panes. Tracks `first_seen`, `last_review_state`, and `notified_parent_timeout` per PR. |
 | **OTel observability** | **Built.** Structured tracing spans with queryable attributes: `agent_id`, `tool.name`, `hook.type`, `role`, `status`. Spans: `spawn_worker`, `call_tool`, `handle_hook_request`, `notify_parent_delivery`, `deliver_to_agent`. |
 | **Coordination mutexes** | Built. In-memory `MutexRegistry` with FIFO wait queues, TTL auto-expiry, idempotent acquire. Effect-only (`coordination.acquire_mutex`, `coordination.release_mutex`) — no MCP tool exposed. |
-| **SigNoz observability** | **Built.** SigNoz + MCP server for LLM-queryable swarm traces. Agents query traces via SigNoz MCP tools (search, aggregate, filter by `agent_id`, structural descendant queries). UI at `http://localhost:8080`, MCP at `http://localhost:8000/mcp`. |
+| **SigNoz observability** | **Built.** SigNoz + MCP server for LLM-queryable swarm traces. Agents query traces via SigNoz MCP tools (search, aggregate, filter by `agent_id`, structural descendant queries). UI at `http://localhost:8931`, MCP at `http://localhost:8932/mcp`. |
 
 ### SigNoz Observability
 
@@ -251,7 +251,7 @@ SigNoz manages ClickHouse schema, OTLP ingestion, and indexing. The **SigNoz MCP
 
 ```bash
 # Start SigNoz stack + MCP server
-touch .exo/otel/.env.signoz
+touch ~/.exo/otel/.env.signoz
 docker compose -f .exo/otel/docker-compose.yml up -d
 
 # Set otlp_endpoint in .exo/config.toml:
@@ -259,11 +259,11 @@ docker compose -f .exo/otel/docker-compose.yml up -d
 
 # Endpoints:
 #   OTLP:       localhost:4317 (gRPC), localhost:4318 (HTTP)
-#   SigNoz UI:  http://localhost:8080  (SIGNOZ_PORT to override)
-#   MCP server: http://localhost:8000/mcp  (MCP_PORT to override)
+#   SigNoz UI:  http://localhost:8931  (SIGNOZ_PORT to override)
+#   MCP server: http://localhost:8932/mcp  (MCP_PORT to override)
 ```
 
-Auth is auto-bootstrapped: `init-signoz-auth` creates an admin user, generates a PAT, and writes it to `.exo/otel/.env.signoz`. The MCP server reads this via `env_file`. The API key is required in the `Authorization: Bearer <key>` header for MCP requests.
+Auth is auto-bootstrapped: `init-signoz-auth` creates an admin user, generates a PAT, and writes it to `~/.exo/otel/.env.signoz`. The MCP server reads this via `env_file`. The API key is required in the `Authorization: Bearer <key>` header for MCP requests.
 
 Without SigNoz running, spans still appear in stderr via the tracing fmt layer.
 

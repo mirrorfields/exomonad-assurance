@@ -6,11 +6,13 @@
 #
 # Endpoints:
 #   OTLP:       localhost:4317 (gRPC), localhost:4318 (HTTP)
-#   SigNoz UI:  http://localhost:${SIGNOZ_PORT:-8080}
-#   MCP server: http://localhost:${MCP_PORT:-8000}/mcp
+#   SigNoz UI:  http://localhost:${SIGNOZ_PORT:-8931}
+#   MCP server: http://localhost:${MCP_PORT:-8932}/mcp
 #
 # Auth is auto-bootstrapped: init-signoz-auth creates an admin user and
-# writes a PAT to .env.signoz. The MCP server reads it via env_file.
+# writes a PAT to ~/.exo/otel/.env.signoz (system-level, not project-local).
+# The MCP server reads it via env_file. exomonad init auto-registers the
+# SigNoz MCP server when this file exists.
 
 x-common: &common
   networks:
@@ -102,7 +104,7 @@ services:
     image: signoz/signoz:${SIGNOZ_VERSION:-v0.115.0}
     container_name: signoz
     ports:
-      - "${SIGNOZ_PORT:-8080}:8080"
+      - "${SIGNOZ_PORT:-8931}:8080"
     volumes:
       - sqlite:/var/lib/signoz/
     environment:
@@ -159,7 +161,7 @@ services:
 
   # Bootstrap: register admin user + create API key for MCP server.
   # Idempotent — skips if admin already exists (register returns error).
-  # Writes SIGNOZ_API_KEY=<pat> to .env.signoz for mcp-server to read.
+  # Writes SIGNOZ_API_KEY=<pat> to ~/.exo/otel/.env.signoz (system-level).
   init-signoz-auth:
     <<: *common
     image: curlimages/curl:8.18.0
@@ -170,7 +172,7 @@ services:
         condition: service_healthy
     restart: on-failure
     volumes:
-      - ./:/host
+      - ${HOME}/.exo/otel:/host
     entrypoint: ["/bin/sh"]
     command:
       - -c
@@ -186,6 +188,8 @@ services:
           echo "API key already exists, skipping"
           exit 0
         fi
+
+        mkdir -p /host
 
         # Register admin (idempotent — fails silently if already registered)
         curl -sf -X POST "$${SIGNOZ}/api/v1/register" \
@@ -224,9 +228,9 @@ services:
       init-signoz-auth:
         condition: service_completed_successfully
     ports:
-      - "${MCP_PORT:-8000}:8000"
+      - "${MCP_PORT:-8932}:8000"
     env_file:
-      - .env.signoz
+      - ${HOME}/.exo/otel/.env.signoz
     environment:
       - SIGNOZ_URL=http://signoz:8080
       - TRANSPORT_MODE=http

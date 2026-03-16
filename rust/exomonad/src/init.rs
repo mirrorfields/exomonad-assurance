@@ -264,8 +264,10 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
         mcp_servers.insert(name.clone(), entry);
     }
 
-    // Auto-register SigNoz MCP server if .env.signoz has an API key
-    let signoz_env = cwd.join(".exo/otel/.env.signoz");
+    // Auto-register SigNoz MCP server if ~/.exo/otel/.env.signoz has an API key
+    let signoz_env = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".exo/otel/.env.signoz"))
+        .unwrap_or_default();
     if signoz_env.exists() && !config.extra_mcp_servers.contains_key("signoz") {
         if let Ok(content) = std::fs::read_to_string(&signoz_env) {
             let key = content
@@ -284,7 +286,7 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                         "headers": { "Authorization": format!("Bearer {}", key) }
                     }),
                 );
-                info!("Auto-registered SigNoz MCP server from .exo/otel/.env.signoz");
+                info!("Auto-registered SigNoz MCP server from ~/.exo/otel/.env.signoz");
             }
         }
     }

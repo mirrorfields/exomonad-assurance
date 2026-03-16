@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+/// Default port for the SigNoz MCP server.
+const DEFAULT_SIGNOZ_MCP_PORT: u16 = 8932;
+
 /// External MCP server configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpServerConfig {
@@ -218,11 +221,11 @@ impl Config {
         // Resolve otlp_endpoint: local > global
         let otlp_endpoint = local_raw.otlp_endpoint.or(global_raw.otlp_endpoint);
 
-        // Resolve signoz_mcp_port: local > global > 8000
+        // Resolve signoz_mcp_port: local > global > 8932
         let signoz_mcp_port = local_raw
             .signoz_mcp_port
             .or(global_raw.signoz_mcp_port)
-            .unwrap_or(8000);
+            .unwrap_or(DEFAULT_SIGNOZ_MCP_PORT);
 
         Ok(Self {
             project_dir,
@@ -270,7 +273,7 @@ impl Default for Config {
             initial_prompt: None,
             yolo: false,
             otlp_endpoint: None,
-            signoz_mcp_port: 8000,
+            signoz_mcp_port: DEFAULT_SIGNOZ_MCP_PORT,
         }
     }
 }
