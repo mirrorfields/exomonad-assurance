@@ -247,7 +247,9 @@ async fn main() -> Result<()> {
                 Ok(content) => {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(pid) = parsed.get("pid").and_then(|v| v.as_u64()) {
-                            let alive = std::path::Path::new(&format!("/proc/{}", pid)).exists();
+                            use nix::sys::signal;
+                            use nix::unistd::Pid;
+                            let alive = signal::kill(Pid::from_raw(pid as i32), None).is_ok();
                             println!("PID: {} ({})", pid, if alive { "running" } else { "not running" });
                             if !alive {
                                 eprintln!("Warning: server process {} is not running. Stale socket?", pid);
