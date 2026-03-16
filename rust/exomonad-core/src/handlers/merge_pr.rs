@@ -52,9 +52,17 @@ impl MergePrEffects for MergePRHandler {
             "[MergePR] merge_pr complete"
         );
 
-        if let Some(ref log) = self.event_log {
-            if result.success {
-                if let Err(e) = log.append(
+        if result.success {
+            tracing::info!(
+                otel.name = "pr.merged",
+                agent_id = %ctx.agent_name.to_string(),
+                pr_number = pr_number.as_u64(),
+                strategy = %req.strategy,
+                git_fetched = result.git_fetched,
+                "[event] pr.merged"
+            );
+            if let Some(ref log) = self.event_log {
+                let _ = log.append(
                     "pr.merged",
                     &ctx.agent_name.to_string(),
                     &serde_json::json!({
@@ -62,20 +70,25 @@ impl MergePrEffects for MergePRHandler {
                         "strategy": req.strategy,
                         "git_fetched": result.git_fetched,
                     }),
-                ) {
-                    tracing::warn!(error = %e, "Failed to write event log");
-                }
-            } else {
-                if let Err(e) = log.append(
+                );
+            }
+        } else {
+            tracing::info!(
+                otel.name = "pr.merge_failed",
+                agent_id = %ctx.agent_name.to_string(),
+                pr_number = pr_number.as_u64(),
+                error = %result.message,
+                "[event] pr.merge_failed"
+            );
+            if let Some(ref log) = self.event_log {
+                let _ = log.append(
                     "pr.merge_failed",
                     &ctx.agent_name.to_string(),
                     &serde_json::json!({
                         "pr_number": pr_number.as_u64(),
                         "error": &result.message,
                     }),
-                ) {
-                    tracing::warn!(error = %e, "Failed to write pr.merge_failed event");
-                }
+                );
             }
         }
 

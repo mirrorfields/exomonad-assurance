@@ -351,16 +351,20 @@ pub async fn handle_hook_inner(
                 StopDecision::Block => "block",
             };
 
+            tracing::info!(
+                otel.name = "hook.stop",
+                agent_id = %agent_name_for_hook.as_str(),
+                event_type = ?event_type,
+                decision = %decision_str,
+                reason = ?internal_output.reason,
+                "[event] hook.stop"
+            );
             if let Some(ref log) = state.event_log {
-                let _ = log.append(
-                    "hook.stop",
-                    agent_name_for_hook.as_str(),
-                    &serde_json::json!({
-                        "event_type": event_type,
-                        "decision": decision_str,
-                        "reason": internal_output.reason,
-                    }),
-                );
+                let _ = log.append("hook.stop", agent_name_for_hook.as_str(), &serde_json::json!({
+                    "event_type": format!("{:?}", event_type),
+                    "decision": decision_str,
+                    "reason": internal_output.reason,
+                }));
             }
 
             // Emit StopHookBlocked tmux event
@@ -560,18 +564,24 @@ pub async fn call_tool(
         Ok(o) => o,
         Err(e) => {
             tracing::error!(tool = %body.name, error = %e, "WASM call failed");
+            tracing::info!(
+                otel.name = "tool.called",
+                agent_id = %name,
+                tool_name = %body.name,
+                role = %role,
+                duration_ms = duration_ms,
+                success = false,
+                error = %e,
+                "[event] tool.called"
+            );
             if let Some(ref log) = state.event_log {
-                let _ = log.append(
-                    "tool.called",
-                    &name,
-                    &serde_json::json!({
-                        "tool_name": body.name,
-                        "role": role,
-                        "duration_ms": duration_ms,
-                        "success": false,
-                        "error": e.to_string(),
-                    }),
-                );
+                let _ = log.append("tool.called", &name, &serde_json::json!({
+                    "tool_name": body.name,
+                    "role": role,
+                    "duration_ms": duration_ms,
+                    "success": false,
+                    "error": e.to_string(),
+                }));
             }
             return Json(serde_json::json!({
                 "success": false,
@@ -582,18 +592,24 @@ pub async fn call_tool(
         }
     };
 
+    tracing::info!(
+        otel.name = "tool.called",
+        agent_id = %name,
+        tool_name = %body.name,
+        role = %role,
+        duration_ms = duration_ms,
+        success = output.success,
+        error = ?output.error,
+        "[event] tool.called"
+    );
     if let Some(ref log) = state.event_log {
-        let _ = log.append(
-            "tool.called",
-            &name,
-            &serde_json::json!({
-                "tool_name": body.name,
-                "role": role,
-                "duration_ms": duration_ms,
-                "success": output.success,
-                "error": output.error,
-            }),
-        );
+        let _ = log.append("tool.called", &name, &serde_json::json!({
+            "tool_name": body.name,
+            "role": role,
+            "duration_ms": duration_ms,
+            "success": output.success,
+            "error": output.error,
+        }));
     }
 
     Json(serde_json::json!({
@@ -702,6 +718,18 @@ Run `exomonad recompile` first to build it.",
     let team_registry = Arc::new(claude_teams_bridge::TeamRegistry::new());
     let acp_registry = Arc::new(exomonad_core::services::acp_registry::AcpRegistry::new());
 
+    // JSONL event log (parallel to OTel span events, queryable via DuckDB/kaizen)
+    let event_log = match exomonad_core::services::EventLog::open(project_dir.join(".exo/logs")) {
+        Ok(log) => {
+            info!(path = %project_dir.join(".exo/logs").display(), "Event log opened");
+            Some(Arc::new(log))
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to open event log, JSONL logging disabled");
+            None
+        }
+    };
+
     let project_dir_for_services = project_dir.clone();
     let mut agent_control =
         exomonad_core::services::agent_control::AgentControlService::new(
@@ -746,19 +774,6 @@ Run `exomonad recompile` first to build it.",
             "session".to_string(),
             "coordination".to_string(),
         ]);
-    // Create structured event log (JSONL)
-    let event_log = match exomonad_core::services::EventLog::open(
-        project_dir.join(".exo/logs"),
-    ) {
-        Ok(el) => {
-            info!(path = %project_dir.join(".exo/logs").display(), "Event log opened");
-            Some(Arc::new(el))
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to open event log, structured events will not be recorded");
-            None
-        }
-    };
 
     builder = builder.with_handlers(exomonad_core::core_handlers(
         project_dir.clone(),
@@ -779,8 +794,8 @@ Run `exomonad recompile` first to build it.",
         claude_session_registry,
         team_registry.clone(),
         acp_registry.clone(),
-        event_log.clone(),
         mutex_registry,
+        event_log.clone(),
     );
     builder = builder.with_handlers(orch_handlers);
     let rt = builder.build().await.context("Failed to build runtime")?;
@@ -816,12 +831,12 @@ Run `exomonad recompile` first to build it.",
         event_queue.clone(),
         project_dir.clone(),
     );
-    if let Some(ref el) = event_log {
-        poller = poller.with_event_log(el.clone());
-    }
     poller = poller.with_team_registry(team_registry);
     poller = poller.with_acp_registry(acp_registry.clone());
     poller = poller.with_plugins(plugins.clone());
+    if let Some(ref log) = event_log {
+        poller = poller.with_event_log(log.clone());
+    }
     tokio::spawn(async move {
         poller.run().await;
     });

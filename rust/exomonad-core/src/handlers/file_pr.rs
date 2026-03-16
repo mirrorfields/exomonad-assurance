@@ -83,12 +83,26 @@ impl FilePrEffects for FilePRHandler {
             "[FilePR] file_pr complete"
         );
 
+        let event_type = if output.created {
+            "pr.filed"
+        } else {
+            "pr.updated"
+        };
+
+        tracing::info!(
+            otel.name = event_type,
+            agent_id = %ctx.agent_name.to_string(),
+            pr_number = output.pr_number.as_u64(),
+            pr_url = %output.pr_url,
+            head_branch = %output.head_branch,
+            base_branch = %output.base_branch,
+            created = output.created,
+            title = %input.title,
+            "[event] {}",
+            event_type
+        );
+
         if let Some(ref log) = self.event_log {
-            let event_type = if output.created {
-                "pr.filed"
-            } else {
-                "pr.updated"
-            };
             if let Err(e) = log.append(
                 event_type,
                 &ctx.agent_name.to_string(),

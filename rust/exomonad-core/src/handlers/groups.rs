@@ -24,10 +24,10 @@ pub fn core_handlers(
     project_dir: PathBuf,
     event_log: Option<Arc<EventLog>>,
 ) -> Vec<Box<dyn EffectHandler>> {
-    let log_handler = match event_log {
-        Some(el) => LogHandler::new().with_event_log(el),
-        None => LogHandler::new(),
-    };
+    let mut log_handler = LogHandler::new();
+    if let Some(ref log) = event_log {
+        log_handler = log_handler.with_event_log(log.clone());
+    }
     vec![
         Box::new(log_handler),
         Box::new(KvHandler::new(project_dir.clone())),
@@ -50,7 +50,6 @@ pub fn git_handlers(
 ) -> Vec<Box<dyn EffectHandler>> {
     let mut file_pr_handler = FilePRHandler::new(git_wt.clone());
     let mut merge_pr_handler = MergePRHandler::new(git_wt);
-
     if let Some(ref log) = event_log {
         file_pr_handler = file_pr_handler.with_event_log(log.clone());
         merge_pr_handler = merge_pr_handler.with_event_log(log.clone());
@@ -83,20 +82,19 @@ pub fn orchestration_handlers(
     claude_session_registry: Arc<ClaudeSessionRegistry>,
     team_registry: Arc<TeamRegistry>,
     acp_registry: Arc<AcpRegistry>,
-    event_log: Option<Arc<EventLog>>,
     mutex_registry: Arc<MutexRegistry>,
+    event_log: Option<Arc<EventLog>>,
 ) -> Vec<Box<dyn EffectHandler>> {
     let mut agent_handler = AgentHandler::new(agent_control)
         .with_claude_session_registry(claude_session_registry.clone())
         .with_acp_registry(acp_registry.clone());
-    if let Some(ref log) = event_log {
-        agent_handler = agent_handler.with_event_log(log.clone());
-    }
 
     let mut event_handler = EventHandler::new(event_queue, event_queue_scope, project_dir)
         .with_team_registry(team_registry.clone())
         .with_acp_registry(acp_registry.clone());
+
     if let Some(ref log) = event_log {
+        agent_handler = agent_handler.with_event_log(log.clone());
         event_handler = event_handler.with_event_log(log.clone());
     }
 

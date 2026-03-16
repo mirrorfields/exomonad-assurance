@@ -5,7 +5,6 @@
 use crate::effects::{dispatch_events_effect, EffectHandler, EffectResult, EventEffects};
 use crate::services::acp_registry::AcpRegistry;
 use crate::services::delivery::DeliveryResult;
-use crate::services::event_log::EventLog;
 use crate::services::EventQueue;
 use async_trait::async_trait;
 use claude_teams_bridge::TeamRegistry;
@@ -25,9 +24,10 @@ pub struct EventHandler {
     team_registry: Option<Arc<TeamRegistry>>,
     /// ACP connection registry for prompt-based delivery.
     acp_registry: Option<Arc<AcpRegistry>>,
-    event_log: Option<Arc<EventLog>>,
     /// Project root directory for resolving UDS socket paths.
     project_dir: std::path::PathBuf,
+    /// JSONL event log for offline analysis.
+    event_log: Option<Arc<crate::services::event_log::EventLog>>,
 }
 
 impl EventHandler {
@@ -41,8 +41,8 @@ impl EventHandler {
             event_queue_scope: event_queue_scope.unwrap_or_else(|| "default".to_string()),
             team_registry: None,
             acp_registry: None,
-            event_log: None,
             project_dir,
+            event_log: None,
         }
     }
 
@@ -56,7 +56,7 @@ impl EventHandler {
         self
     }
 
-    pub fn with_event_log(mut self, log: Arc<EventLog>) -> Self {
+    pub fn with_event_log(mut self, log: Arc<crate::services::event_log::EventLog>) -> Self {
         self.event_log = Some(log);
         self
     }
@@ -216,7 +216,6 @@ impl EventEffects for EventHandler {
         let delivery_result = crate::services::delivery::deliver_to_agent(
             self.team_registry.as_deref(),
             self.acp_registry.as_deref(),
-            self.event_log.as_deref(),
             &self.project_dir,
             &req.recipient,
             &tab_name,
@@ -234,16 +233,13 @@ impl EventEffects for EventHandler {
             DeliveryResult::Failed => "failed",
         };
 
-        if let Some(ref log) = self.event_log {
-            let _ = log.append(
-                "agent.message_sent",
-                sender,
-                &serde_json::json!({
-                    "recipient": &req.recipient,
-                    "method": method_string,
-                }),
-            );
-        }
+        tracing::info!(
+            otel.name = "agent.message_sent",
+            agent_id = %sender,
+            recipient = %req.recipient,
+            method = method_string,
+            "[event] agent.message_sent"
+        );
 
         Ok(SendMessageResponse {
             success: !matches!(delivery_result, DeliveryResult::Failed),

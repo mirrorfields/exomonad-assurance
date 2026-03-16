@@ -16,7 +16,6 @@ use crate::services::agent_control::{
     SpawnWorkerOptions,
 };
 use crate::services::claude_session_registry::ClaudeSessionRegistry;
-use crate::services::event_log::EventLog;
 use crate::{GithubOwner, GithubRepo, IssueNumber};
 use async_trait::async_trait;
 use exomonad_proto::effects::agent::*;
@@ -32,7 +31,7 @@ pub struct AgentHandler {
     service: Arc<AgentControlService>,
     claude_session_registry: Option<Arc<ClaudeSessionRegistry>>,
     acp_registry: Option<Arc<AcpRegistry>>,
-    event_log: Option<Arc<EventLog>>,
+    event_log: Option<Arc<crate::services::event_log::EventLog>>,
 }
 
 impl AgentHandler {
@@ -50,13 +49,13 @@ impl AgentHandler {
         self
     }
 
-    pub fn with_acp_registry(mut self, reg: Arc<AcpRegistry>) -> Self {
-        self.acp_registry = Some(reg);
+    pub fn with_event_log(mut self, log: Arc<crate::services::event_log::EventLog>) -> Self {
+        self.event_log = Some(log);
         self
     }
 
-    pub fn with_event_log(mut self, log: Arc<EventLog>) -> Self {
-        self.event_log = Some(log);
+    pub fn with_acp_registry(mut self, reg: Arc<AcpRegistry>) -> Self {
+        self.acp_registry = Some(reg);
         self
     }
 }
@@ -227,20 +226,20 @@ impl AgentEffects for AgentHandler {
 
         let agent_info = worker_result_to_proto(&req.name, &result);
 
+        tracing::info!(
+            otel.name = "agent.spawned",
+            agent_id = %ctx.agent_name.to_string(),
+            child_agent = %agent_info.id,
+            agent_type = %AgentType::try_from(agent_info.agent_type).map(|t| format!("{:?}", t)).unwrap_or_else(|_| "unknown".to_string()),
+            branch = %agent_info.branch_name,
+            spawn_type = "worker",
+            "[event] agent.spawned"
+        );
         if let Some(ref log) = self.event_log {
-            if let Err(e) = log.append(
-                "agent.spawned",
-                &ctx.agent_name.to_string(),
-                &serde_json::json!({
-                    "child_agent": &agent_info.id,
-                    "agent_type": &agent_info.agent_type,
-                    "branch": &agent_info.branch_name,
-                    "worktree": &agent_info.worktree_path,
-                    "spawn_type": "worker",
-                }),
-            ) {
-                warn!(error = %e, "Failed to write agent.spawned event");
-            }
+            let _ = log.append("agent.spawned", &ctx.agent_name.to_string(), &serde_json::json!({
+                "child_agent": agent_info.id, "agent_type": "gemini", "spawn_type": "worker",
+                "branch": agent_info.branch_name,
+            }));
         }
 
         Ok(SpawnWorkerResponse {
@@ -315,21 +314,20 @@ impl AgentEffects for AgentHandler {
 
         let agent_info = subtree_result_to_proto(&req.branch_name, &result);
 
+        tracing::info!(
+            otel.name = "agent.spawned",
+            agent_id = %ctx.agent_name.to_string(),
+            child_agent = %agent_info.id,
+            agent_type = %AgentType::try_from(agent_info.agent_type).map(|t| format!("{:?}", t)).unwrap_or_else(|_| "unknown".to_string()),
+            branch = %agent_info.branch_name,
+            spawn_type = "subtree",
+            "[event] agent.spawned"
+        );
         if let Some(ref log) = self.event_log {
-            if let Err(e) = log.append(
-                "agent.spawned",
-                &ctx.agent_name.to_string(),
-                &serde_json::json!({
-                    "child_agent": &agent_info.id,
-                    "agent_type": &agent_info.agent_type,
-                    "branch": &agent_info.branch_name,
-                    "worktree": &agent_info.worktree_path,
-                    "spawn_type": "subtree",
-                    "slug": agent_info.branch_name.rsplit_once('.').map(|(_, s)| s).unwrap_or(&agent_info.branch_name),
-                }),
-            ) {
-                warn!(error = %e, "Failed to write agent.spawned event");
-            }
+            let _ = log.append("agent.spawned", &ctx.agent_name.to_string(), &serde_json::json!({
+                "child_agent": agent_info.id, "agent_type": "claude", "spawn_type": "subtree",
+                "branch": agent_info.branch_name,
+            }));
         }
 
         Ok(SpawnSubtreeResponse {
@@ -364,21 +362,20 @@ impl AgentEffects for AgentHandler {
 
         let agent_info = leaf_subtree_result_to_proto(&req.branch_name, &result);
 
+        tracing::info!(
+            otel.name = "agent.spawned",
+            agent_id = %ctx.agent_name.to_string(),
+            child_agent = %agent_info.id,
+            agent_type = %AgentType::try_from(agent_info.agent_type).map(|t| format!("{:?}", t)).unwrap_or_else(|_| "unknown".to_string()),
+            branch = %agent_info.branch_name,
+            spawn_type = "leaf_subtree",
+            "[event] agent.spawned"
+        );
         if let Some(ref log) = self.event_log {
-            if let Err(e) = log.append(
-                "agent.spawned",
-                &ctx.agent_name.to_string(),
-                &serde_json::json!({
-                    "child_agent": &agent_info.id,
-                    "agent_type": &agent_info.agent_type,
-                    "branch": &agent_info.branch_name,
-                    "worktree": &agent_info.worktree_path,
-                    "spawn_type": "leaf_subtree",
-                    "slug": agent_info.branch_name.rsplit_once('.').map(|(_, s)| s).unwrap_or(&agent_info.branch_name),
-                }),
-            ) {
-                warn!(error = %e, "Failed to write agent.spawned event");
-            }
+            let _ = log.append("agent.spawned", &ctx.agent_name.to_string(), &serde_json::json!({
+                "child_agent": agent_info.id, "agent_type": "gemini", "spawn_type": "leaf_subtree",
+                "branch": agent_info.branch_name,
+            }));
         }
 
         Ok(SpawnLeafSubtreeResponse {
@@ -469,21 +466,20 @@ impl AgentEffects for AgentHandler {
             topology: exomonad_proto::effects::agent::WorkspaceTopology::SharedDir as i32,
         };
 
+        tracing::info!(
+            otel.name = "agent.spawned",
+            agent_id = %ctx.agent_name.to_string(),
+            child_agent = %agent_info.id,
+            agent_type = %AgentType::try_from(agent_info.agent_type).map(|t| format!("{:?}", t)).unwrap_or_else(|_| "unknown".to_string()),
+            branch = %agent_info.branch_name,
+            spawn_type = "acp",
+            "[event] agent.spawned"
+        );
         if let Some(ref log) = self.event_log {
-            if let Err(e) = log.append(
-                "agent.spawned",
-                &ctx.agent_name.to_string(),
-                &serde_json::json!({
-                    "child_agent": &agent_info.id,
-                    "agent_type": &agent_info.agent_type,
-                    "branch": &agent_info.branch_name,
-                    "worktree": &agent_info.worktree_path,
-                    "spawn_type": "acp",
-                    "slug": &agent_info.id,
-                }),
-            ) {
-                warn!(error = %e, "Failed to write agent.spawned event");
-            }
+            let _ = log.append("agent.spawned", &ctx.agent_name.to_string(), &serde_json::json!({
+                "child_agent": agent_info.id, "agent_type": "gemini", "spawn_type": "acp",
+                "branch": agent_info.branch_name,
+            }));
         }
 
         Ok(SpawnAcpResponse {

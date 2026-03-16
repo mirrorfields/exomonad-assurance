@@ -2,7 +2,6 @@ use crate::domain::PRNumber;
 use crate::plugin_manager::PluginManager;
 use crate::services::acp_registry::AcpRegistry;
 use crate::services::agent_control::AgentType;
-use crate::services::event_log::EventLog;
 use crate::services::event_queue::EventQueue;
 use crate::services::repo;
 use anyhow::{Context, Result};
@@ -21,7 +20,6 @@ type PluginMap = Arc<RwLock<HashMap<crate::AgentName, Arc<PluginManager>>>>;
 
 pub struct GitHubPoller {
     event_queue: Arc<EventQueue>,
-    event_log: Option<Arc<EventLog>>,
     project_dir: PathBuf,
     poll_interval: Duration,
     state: Arc<Mutex<HashMap<PRNumber, PRState>>>,
@@ -29,6 +27,7 @@ pub struct GitHubPoller {
     team_registry: Option<Arc<TeamRegistry>>,
     acp_registry: Option<Arc<AcpRegistry>>,
     plugins: Option<PluginMap>,
+    event_log: Option<Arc<super::event_log::EventLog>>,
 }
 
 /// A Copilot review comment with optional file context.
@@ -277,7 +276,6 @@ impl GitHubPoller {
     pub fn new(event_queue: Arc<EventQueue>, project_dir: PathBuf) -> Self {
         Self {
             event_queue,
-            event_log: None,
             project_dir,
             poll_interval: Duration::from_secs(60),
             state: Arc::new(Mutex::new(HashMap::new())),
@@ -285,7 +283,13 @@ impl GitHubPoller {
             team_registry: None,
             acp_registry: None,
             plugins: None,
+            event_log: None,
         }
+    }
+
+    pub fn with_event_log(mut self, log: Arc<super::event_log::EventLog>) -> Self {
+        self.event_log = Some(log);
+        self
     }
 
     pub fn with_team_registry(mut self, registry: Arc<TeamRegistry>) -> Self {
@@ -300,11 +304,6 @@ impl GitHubPoller {
 
     pub fn with_plugins(mut self, plugins: PluginMap) -> Self {
         self.plugins = Some(plugins);
-        self
-    }
-
-    pub fn with_event_log(mut self, event_log: Arc<EventLog>) -> Self {
-        self.event_log = Some(event_log);
         self
     }
 
@@ -383,20 +382,24 @@ impl GitHubPoller {
             Ok(action) => {
                 info!("[EventDispatch] handle_event returned: {:?}", action);
 
+                let action_str = match action {
+                    EventActionResponse::InjectMessage { .. } => "inject_message",
+                    EventActionResponse::NotifyParent { .. } => "notify_parent",
+                    EventActionResponse::NoAction => "no_action",
+                };
+
+                tracing::info!(
+                    otel.name = "event.dispatched",
+                    agent_id = %agent_name,
+                    event_type = %event_type,
+                    action = %action_str,
+                    "[event] event.dispatched"
+                );
                 if let Some(ref log) = self.event_log {
-                    let action_str = match action {
-                        EventActionResponse::InjectMessage { .. } => "inject_message",
-                        EventActionResponse::NotifyParent { .. } => "notify_parent",
-                        EventActionResponse::NoAction => "no_action",
-                    };
-                    let _ = log.append(
-                        "event.dispatched",
-                        agent_name,
-                        &serde_json::json!({
-                            "event_type": event_type,
-                            "action": action_str,
-                        }),
-                    );
+                    let _ = log.append("event.dispatched", agent_name, &serde_json::json!({
+                        "event_type": event_type,
+                        "action": action_str,
+                    }));
                 }
 
                 Ok(Some(action))
@@ -407,15 +410,18 @@ impl GitHubPoller {
                     agent_name, e
                 );
 
+                tracing::info!(
+                    otel.name = "event.dispatch_failed",
+                    agent_id = %agent_name,
+                    event_type = %event_type,
+                    error = %e,
+                    "[event] event.dispatch_failed"
+                );
                 if let Some(ref log) = self.event_log {
-                    let _ = log.append(
-                        "event.dispatch_failed",
-                        agent_name,
-                        &serde_json::json!({
-                            "event_type": event_type,
-                            "error": e.to_string(),
-                        }),
-                    );
+                    let _ = log.append("event.dispatch_failed", agent_name, &serde_json::json!({
+                        "event_type": event_type,
+                        "error": e.to_string(),
+                    }));
                 }
 
                 Ok(None)
@@ -437,7 +443,6 @@ impl GitHubPoller {
                 crate::services::delivery::deliver_to_agent(
                     self.team_registry.as_deref(),
                     self.acp_registry.as_deref(),
-                    self.event_log.as_deref(),
                     &self.project_dir,
                     branch,
                     &tab_name,
@@ -488,6 +493,7 @@ impl GitHubPoller {
         }
     }
 
+    #[tracing::instrument(skip_all, name = "github_poller.poll_cycle")]
     async fn poll_cycle(&self) -> Result<()> {
         // Ensure we have repo info
         let (owner, repo) = match self.get_repo_info().await? {
@@ -597,16 +603,20 @@ impl GitHubPoller {
                         }
                     }
 
+                    tracing::info!(
+                        otel.name = "agent.sibling_merged",
+                        agent_id = %branch,
+                        pr_number = pr_num.as_u64(),
+                        branch = %branch,
+                        parent = %parent_branch,
+                        "[event] agent.sibling_merged"
+                    );
                     if let Some(ref log) = self.event_log {
-                        let _ = log.append(
-                            "agent.sibling_merged",
-                            branch,
-                            &serde_json::json!({
-                                "pr_number": pr_num.as_u64(),
-                                "branch": branch,
-                                "parent": parent_branch,
-                            }),
-                        );
+                        let _ = log.append("agent.sibling_merged", branch, &serde_json::json!({
+                            "pr_number": pr_num.as_u64(),
+                            "branch": branch,
+                            "parent": parent_branch,
+                        }));
                     }
 
                     removed_prs.push(*pr_num);
@@ -977,28 +987,42 @@ impl GitHubPoller {
             branch, status, message
         );
 
+        let event_name = match status {
+            "copilot_review" => "copilot.review",
+            "success" => "ci.status_changed",
+            "failure" => "ci.status_changed",
+            "pending" => "ci.status_changed",
+            other => other,
+        };
+
+        let comments_json = comments
+            .as_ref()
+            .and_then(|c| serde_json::to_string(c).ok())
+            .unwrap_or_default();
+        let reviews_json = reviews
+            .as_ref()
+            .and_then(|r| serde_json::to_string(r).ok())
+            .unwrap_or_default();
+
+        tracing::info!(
+            otel.name = event_name,
+            agent_id = %branch,
+            branch = %branch,
+            status = %status,
+            message = %message,
+            comments = %comments_json,
+            reviews = %reviews_json,
+            "[event] {}",
+            event_name
+        );
         if let Some(ref log) = self.event_log {
-            let event_type = match status {
-                "copilot_review" => "copilot.review",
-                "success" => "ci.status_changed",
-                "failure" => "ci.status_changed",
-                "pending" => "ci.status_changed",
-                other => other,
-            };
-            let mut data = serde_json::json!({
+            let _ = log.append(event_name, branch, &serde_json::json!({
                 "branch": branch,
                 "status": status,
                 "message": message,
-            });
-            if let Some(comments) = comments {
-                data["comments"] = serde_json::to_value(&comments).unwrap_or_default();
-            }
-            if let Some(reviews) = reviews {
-                data["reviews"] = serde_json::to_value(&reviews).unwrap_or_default();
-            }
-            if let Err(e) = log.append(event_type, branch, &data) {
-                warn!("Failed to write poller event to JSONL log: {}", e);
-            }
+                "comments": comments,
+                "reviews": reviews,
+            }));
         }
 
         let event = Event {
