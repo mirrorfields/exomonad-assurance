@@ -142,6 +142,8 @@ echo '{"hook_event_name":"PreToolUse",...}' | exomonad hook pre-tool-use
 | `EXOMONAD_ROLE` | agent spawn | Agent's role name (tl, dev, worker) |
 | `EXOMONAD_TMUX_SESSION` | tmux_events, agent_control | tmux session name for IPC. Set globally via `tmux set-environment` during `exomonad init`; inherited by all windows/panes |
 | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` | agent spawn | Points Gemini at per-agent settings.json |
+| `EXOMONAD_SWARM_RUN_ID` | agent spawn, logging | Swarm run ID (OTel resource attribute, propagated to children) |
+| `EXOMONAD_PARENT_AGENT` | agent spawn, logging | Parent agent's birth branch (OTel resource attribute) |
 
 ### Agent Identity
 

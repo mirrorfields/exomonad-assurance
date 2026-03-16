@@ -30,7 +30,7 @@ exomonad reload                   # Clear WASM plugin cache (hot reload)
 exomonad shutdown                 # Gracefully shut down the running server
 ```
 
-**Observability:** Structured events (agent spawning, tool calls, PR activity) are emitted as OTel span events via `tracing::info!` with the `otel.name` field, replacing the legacy JSONL event log.
+**Observability:** Structured OTel spans via axum middleware. Every agent request (`/agents/{role}/{name}/...`) gets an `agent_request` span with `agent_id`, `agent.role`, `agent.parent`, and `swarm.run_id` — no per-call-site annotation needed. `swarm.run_id` is persisted to `.exo/run_id` and set as an OTel resource attribute; child processes inherit it via `EXOMONAD_SWARM_RUN_ID` env var. Query all spans in a run: `resource.swarm.run_id = '{id}'`. Reconstruct spawn tree: `groupBy agent.parent, agent_id`.
 
 ### Init Command
 
@@ -114,6 +114,8 @@ curl --unix-socket .exo/server.sock http://localhost/health
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `RUST_LOG` | No | Tracing log level |
+| `EXOMONAD_SWARM_RUN_ID` | No | Swarm run ID (set by server, propagated to children). OTel resource attribute. |
+| `EXOMONAD_PARENT_AGENT` | No | Parent agent's birth branch (set at spawn, propagated to children). OTel resource attribute. |
 
 ## Effect Boundary (WASM)
 
