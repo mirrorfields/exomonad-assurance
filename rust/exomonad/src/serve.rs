@@ -903,15 +903,15 @@ Run `exomonad recompile` first to build it.",
         .insert(AgentName::from("root"), root_plugin.clone());
 
     // Check for existing server BEFORE writing our own PID
-    let socket_path_early = project_dir.join(".exo/server.sock");
-    if socket_path_early.exists() {
+    let socket_path = project_dir.join(".exo/server.sock");
+    if socket_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&server_pid_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(pid) = parsed.get("pid").and_then(|v| v.as_u64()) {
-                    let pid_i32 = pid as i32;
-                    let is_self = pid_i32 == std::process::id() as i32;
                     use nix::sys::signal;
                     use nix::unistd::Pid;
+                    let pid_i32 = pid as i32;
+                    let is_self = pid_i32 == std::process::id() as i32;
                     if !is_self && signal::kill(Pid::from_raw(pid_i32), None).is_ok() {
                         return Err(anyhow::anyhow!(
                             "Server already running (PID {}). Stop it first or use a different project directory.",
@@ -921,9 +921,8 @@ Run `exomonad recompile` first to build it.",
                 }
             }
         }
-        // Stale socket (or our own PID) — clean up
-        info!(path = %socket_path_early.display(), "Removing stale socket");
-        let _ = std::fs::remove_file(&socket_path_early);
+        info!(path = %socket_path.display(), "Removing stale socket");
+        let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&server_pid_path);
     }
 
@@ -1004,16 +1003,7 @@ Run `exomonad recompile` first to build it.",
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
-    // Bind Unix domain socket
-    let socket_path = project_dir.join(".exo/server.sock");
-
-    // Stale socket check already done above (before PID write).
-    // Clean up if socket still exists (e.g., race or leftover).
-    if socket_path.exists() {
-        info!(path = %socket_path.display(), "Removing stale socket");
-        std::fs::remove_file(&socket_path)?;
-    }
-
+    // Bind Unix domain socket (stale socket already cleaned up above)
     // Ensure parent directory exists
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
