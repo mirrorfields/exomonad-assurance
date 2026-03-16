@@ -7,6 +7,8 @@ receivers:
 exporters:
   clickhouse:
     endpoint: tcp://clickhouse:9000
+    username: default
+    password: ""
     database: otel
     traces_table_name: otel_traces
     create_schema: true

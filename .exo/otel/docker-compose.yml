@@ -4,6 +4,10 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -11,6 +15,12 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.120.0
@@ -19,7 +29,8 @@ services:
     volumes:
       - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
 
 volumes:
   clickhouse-data:
