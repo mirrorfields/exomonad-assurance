@@ -64,19 +64,26 @@ Pure Haskell prompt assembly for worker/leaf agents. Replaces the former templat
 - Builder monoid: `task`, `boundary`, `steps`, `context`, `verify`, `doneCriteria`, `readFirst`, `raw`
 - Inline profiles: `leafProfile`, `workerProfile`, `researchProfile`, `generalProfile`, `rustProfile`, `haskellProfile`
 
-### Other Tools
+### SDK/Role Split
 
-- `file_pr` (tl, dev roles)
-- `merge_pr` (tl role)
-- `notify_parent` (all roles)
+The SDK (`wasm-guest`) exports **core I/O functions** and **shared descriptions/schemas**. Role code (`.exo/roles/devswarm/`) defines **MCPTool instances** that call the core and apply role-specific state transitions.
+
+| SDK Module | Exports | Used by |
+|-----------|---------|---------|
+| `Tools.FilePR` | `filePRCore`, `filePRDescription`, `filePRSchema`, `FilePRArgs`, `FilePROutput` | `DevFilePR`, `TLFilePR` |
+| `Tools.Events` | `notifyParentCore`, `shutdownCore`, descriptions/schemas, `MCPTool SendMessage` | `DevNotifyParent`, `TLNotifyParent`, `WorkerNotifyParent`, `DevShutdown`, `WorkerShutdown` |
+| `Tools.MergePR` | `mergePRCore`, `mergePRRender`, description/schema, `extractSlug` | `TLMergePR` |
+| `Tools.Spawn` | `forkWaveCore`, `spawnLeafSubtreeCore`, `spawnWorkersCore`, descriptions/schemas, render functions | `TLForkWave`, `TLSpawnLeaf`, `TLSpawnWorkers` |
+
+`SendMessage` is the only tool with an `MCPTool` instance in the SDK (no state transitions needed).
 
 ### Roles
 
-| Role | Tools | Spawned by |
-|------|-------|------------|
-| **tl** | spawn (3), merge_pr, file_pr, notify_parent, send_message | `fork_wave` |
-| **dev** | file_pr, notify_parent, send_message, shutdown | `spawn_leaf_subtree` |
-| **worker** | notify_parent, send_message, shutdown | `spawn_workers` |
+| Role | Tools | State Machine | Spawned by |
+|------|-------|---------------|------------|
+| **tl** | `TLForkWave`, `TLSpawnLeaf`, `TLSpawnWorkers`, `TLMergePR`, `TLFilePR`, `TLNotifyParent`, `SendMessage` | `TLPhase` (tracks children via `ChildSpawned`/`ChildCompleted`) | `fork_wave` |
+| **dev** | `DevFilePR`, `DevNotifyParent`, `SendMessage`, `DevShutdown` | `DevPhase` (tracks PR lifecycle) | `spawn_leaf_subtree` |
+| **worker** | `WorkerNotifyParent`, `SendMessage`, `WorkerShutdown` | None (ephemeral) | `spawn_workers` |
 
 ## Hooks
 
@@ -87,25 +94,37 @@ The guest handles hooks invoked by Claude Code:
 - **`onSubagentStop`**: Validates child agent exit status.
 - **`onStop`**: Stop hook — gates agent exit. Uses `StopCheckResult` (MustBlock/ShouldNudge/Clean).
 
-### Agent Lifecycle (`ExoMonad.Guest.Lifecycle.*`)
+### State Machine (`ExoMonad.Guest.StateMachine`)
 
-GADT-indexed state machine for agent lifecycle phases. Each role has its own GADT (DevState, TLState, WorkerState) where phase-specific data is carried in type-indexed constructors. Invalid state transitions are compile errors.
+Generic `StateMachine` typeclass for agent lifecycle phases. Users define sum types + transitions, framework handles KV persistence, logging, and stop hook integration.
 
-| Module | Purpose |
-|--------|---------|
-| `Lifecycle.DevState` | GADT `DevState (p :: DevPhase)` + existential `SomeDevState` |
-| `Lifecycle.TLState` | GADT `TLState (p :: TLPhase)` + `ChildHandle` + existential `SomeTLState` |
-| `Lifecycle.WorkerState` | GADT `WorkerState (p :: WorkerPhase)` + existential `SomeWorkerState` |
-| `Lifecycle.PhaseEffect` | KV persistence (`getDevPhase`/`setDevPhase` etc.) + `StopCheckResult` |
-| `Lifecycle.DevTransitions` | Typed transitions + `applyDevEvent` + `canExit` |
-| `Lifecycle.TLTransitions` | `applyTLEvent` + `canExit` |
-| `Lifecycle.WorkerTransitions` | `applyWorkerEvent` + `canExit` |
+```haskell
+class (ToJSON phase, FromJSON phase, Typeable phase, Show phase) => StateMachine phase event where
+  transition :: phase -> event -> TransitionResult phase  -- pure
+  canExit    :: phase -> StopCheckResult
+  machineName :: Text  -- scopes KV key: "phase-{name}"
+```
 
-**Typed transitions** (e.g., `filePR :: DevState 'Working -> PRNumber -> URL -> Text -> Eff Effects (DevState 'PRFiled)`) give compile-time phase safety. Use inside pattern match branches on the existential.
+**Framework functions:**
+- `getPhase` — read current phase from KV
+- `applyEvent defaultPhase event` — read phase, apply transition, persist + log
+- `checkExit defaultPhase` — read phase, return `StopCheckResult`
 
-**Existential transitions** (e.g., `applyDevEvent :: DevEvent -> Eff Effects ()`) handle KV read/write internally. Use from tool handlers and event handlers.
+**Phase types** live in `.exo/roles/devswarm/`:
+- `DevPhase.hs` — dev agent phases + events + `StateMachine` instance
+- `TLPhase.hs` — TL agent phases (with `ChildHandle` in `TLWaiting`) + events + instance
+- `WorkerPhase.hs` — worker agent phases + events + instance
 
-**Soft block pattern**: Tool handlers check phase via `getDevPhase`, log a warning for unexpected phases, but proceed anyway (idempotent tools like `file_pr`).
+**KV key scoping:** Each machine writes to `"phase-{machineName}"` (e.g., `"phase-dev"`, `"phase-tl"`), preventing cross-role collisions.
+
+**Usage from tool/event handlers:**
+```haskell
+import ExoMonad.Guest.StateMachine (applyEvent)
+import DevPhase (DevPhase(..), DevEvent(..))
+
+-- In a tool handler:
+void $ applyEvent @DevPhase @DevEvent DevSpawned (PRCreated prNum url branch)
+```
 
 ### Stop Hook State Machine (`ExoMonad.Guest.Effects.StopHook`)
 
