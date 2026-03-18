@@ -217,6 +217,18 @@ validated_string!(
     "claude_session_uuid"
 );
 
+validated_string!(
+    #[doc = "Git commit SHA (full or abbreviated)."]
+    CommitSha,
+    "commit_sha"
+);
+
+validated_string!(
+    #[doc = "Claude Code Teams team name."]
+    TeamName,
+    "team_name"
+);
+
 #[cfg(test)]
 impl SessionId {
     /// Create from &str (unchecked, for tests).
