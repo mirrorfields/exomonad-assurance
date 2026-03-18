@@ -81,7 +81,7 @@ Register manually in `.mcp.json`:
   "mcpServers": {
     "exomonad": {
       "command": "exomonad",
-      "args": ["mcp-stdio", "--role", "tl", "--agent-id", "root"]
+      "args": ["mcp-stdio", "--role", "root", "--agent-id", "root"]
     }
   }
 }
@@ -91,20 +91,22 @@ Register manually in `.mcp.json`:
 
 | Tool | Role | Description |
 |------|------|-------------|
-| `spawn_subtree` | tl | Fork Claude agent into worktree + tmux window (TL role) |
-| `spawn_leaf_subtree` | tl | Fork Gemini agent into worktree + tmux window (dev role, files PR) |
-| `spawn_workers` | tl | Spawn Gemini agents as panes (ephemeral, no worktree) |
+| `fork_wave` | root, tl | Fork N parallel Claude agents, each in its own worktree |
+| `spawn_gemini` | root, tl | Spawn Gemini agent (worktree, inline, or standalone isolation) |
 | `file_pr` | tl, dev | Create/update PR for current branch |
-| `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
-| `notify_parent` | all | Send message to parent agent |
+| `merge_pr` | root, tl | Merge child PR (gh merge + git fetch) |
+| `notify_parent` | tl, dev, worker | Send message to parent agent |
 | `send_message` | all | Send message to another agent (routes via Teams inbox / ACP / UDS / tmux fallback) |
+| `task_list` | dev, worker | List tasks from shared task list |
+| `task_get` | dev, worker | Get task by ID |
+| `task_update` | dev, worker | Update task status/owner/activeForm |
 
 ### Debugging
 
 You can probe the UDS server using `curl`:
 ```bash
 # List tools for an agent
-curl --unix-socket .exo/server.sock http://localhost/agents/tl/root/tools
+curl --unix-socket .exo/server.sock http://localhost/agents/root/root/tools
 
 # Call a tool
 curl --unix-socket .exo/server.sock -X POST http://localhost/agents/tl/root/tools/call \
@@ -142,7 +144,8 @@ All effects flow through a single `yield_effect` host function using protobuf bi
 | `events.*` | EventHandler | Event queue, notify_parent, send_message |
 | `merge_pr.*` | MergePRHandler | gh pr merge + git fetch |
 | `kv.*` | KvHandler | Key-value store (.exo/kv/) |
-| `session.*` | SessionHandler | Claude session registry |
+| `session.*` | SessionHandler | Claude session registry, team registration/deregistration |
+| `tasks.*` | TasksHandler | Task list operations (list, get, update) with team auto-resolution |
 | `coordination.*` | CoordinationHandler | In-memory mutex (FIFO wait queue, TTL expiry) |
 
 ## Building

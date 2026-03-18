@@ -26,9 +26,9 @@ Before dispatch, classify each task:
 
 | Classification | Agent | Spawn Tool | Examples |
 |----------------|-------|------------|----------|
-| **Focused implementation** | Gemini leaf | `spawn_leaf_subtree` | single feature, bug fix, docs |
-| **Multi-step decomposition** | Claude subtree | `spawn_subtree` | architecture, refactors requiring sub-spawns |
-| **Investigation / research** | Gemini worker | `spawn_workers` | hypothesis testing, codebase exploration |
+| **Focused implementation** | Gemini leaf | `spawn_gemini` (worktree) | single feature, bug fix, docs |
+| **Multi-step decomposition** | Claude subtree | `fork_wave` | architecture, refactors requiring sub-spawns |
+| **Investigation / research** | Gemini worker | `spawn_gemini` (inline) | hypothesis testing, codebase exploration |
 
 ### 3. Collision Check (CRITICAL)
 
@@ -64,15 +64,13 @@ Wave N:
 ### 5. Dispatch
 
 ```
-# Spawn leaves for focused tasks
-spawn_leaf_subtree(task="Implement X", branch_name="feature-x")
-spawn_leaf_subtree(task="Implement Y", branch_name="feature-y")
+# Spawn leaves for focused tasks (own branch, files PR)
+spawn_gemini(name="feature-x", task="Implement X", isolation="worktree")
+spawn_gemini(name="feature-y", task="Implement Y", isolation="worktree")
 
-# Spawn workers for investigation
-spawn_workers(specs=[
-  { name: "h1", task: "Investigate hypothesis 1" },
-  { name: "h2", task: "Investigate hypothesis 2" }
-])
+# Spawn workers for investigation (ephemeral panes)
+spawn_gemini(name="h1", task="Investigate hypothesis 1", isolation="inline")
+spawn_gemini(name="h2", task="Investigate hypothesis 2", isolation="inline")
 ```
 
 After spawning, **return immediately**. Idle until `[PR READY]`, `[FIXES PUSHED]`, or `[from: agent]` messages arrive.
@@ -107,9 +105,9 @@ When parallel PRs exist:
 gh issue list                # Available work
 
 # Dispatch
-spawn_leaf_subtree           # Gemini in worktree, files PR
-spawn_subtree                # Claude in worktree, can sub-spawn
-spawn_workers                # Gemini panes, ephemeral
+spawn_gemini(isolation="worktree")  # Gemini in worktree, files PR
+fork_wave                           # Claude in worktree, can sub-spawn
+spawn_gemini(isolation="inline")    # Gemini panes, ephemeral
 
 # Monitoring — idle until messages arrive
 # [PR READY] — Copilot approved, merge

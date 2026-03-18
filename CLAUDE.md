@@ -152,7 +152,7 @@ cargo build -p exomonad
 3. Copies binary to `~/.cargo/bin/exomonad`
 
 **WASM build pipeline:**
-1. Role configs in `.exo/roles/devswarm/` define tool composition per role (`TLRole.hs`, `DevRole.hs`)
+1. Role configs in `.exo/roles/devswarm/` define tool composition per role (`RootRole.hs`, `TLRole.hs`, `DevRole.hs`, `WorkerRole.hs`)
 2. `AllRoles.hs` registers all roles; `Main.hs` provides FFI exports
 3. `cabal.project.wasm` lists the devswarm package alongside `wasm-guest` SDK
 4. `just wasm-all` builds via `nix develop .#wasm -c wasm32-wasi-cabal build ...`
@@ -198,15 +198,17 @@ What you can do with exomonad right now, end-to-end.
 
 Spawn heterogeneous agent teams as a recursive tree:
 
-- **`fork_wave`** — Fork N parallel Claude agents from your current conversation context, each in its own worktree. Children inherit the full context window and only need a slug + task. Requires clean git state (committed and pushed).
-- **`spawn_leaf_subtree`** — Fork a Gemini agent into its own git worktree + tmux window. Gets dev role, files PR when done.
-- **`spawn_workers`** — Spawn multiple Gemini agents as tmux panes in the parent's directory. Ephemeral (no branch, no worktree). Config in `.exo/agents/{name}/`.
+- **`fork_wave`** — Fork N parallel Claude agents, each in its own worktree. Optionally inherit context via `fork_session: true` per child. Requires clean git state (committed and pushed).
+- **`spawn_gemini`** — Unified Gemini spawn tool with three isolation modes:
+  - `isolation: "worktree"` — Own branch + directory, files PR when done
+  - `isolation: "inline"` — Ephemeral pane in parent directory, no branch/PR
+  - `isolation: "standalone"` — Own git repo for full filesystem isolation
 
 **Agent Types:** `Claude` (🤖), `Gemini` (💎), `Shoal` (🌊). Shoal is for custom binary agents that connect via rmcp MCP client and receive notifications via HTTP-over-Unix-domain-socket at `.exo/agents/{name}/notify.sock`.
 
 **Multi-WASM:** The server loads multiple WASM modules from `.exo/wasm/`. Convention: if `wasm-guest-{role}.wasm` exists, it's used for that role; otherwise falls back to `wasm-guest-{wasm_name}.wasm` (default). Drop a WASM file, it's available.
 
-**Standalone repo mode:** `spawn_leaf_subtree` accepts `standalone_repo: true`. Instead of a git worktree (which shares `.git` with the parent), this creates a fresh `git init` repo. Claude's native project discovery treats the local `.git` as the boundary — the agent cannot traverse into the parent repository. Use this for information segmentation (e.g., enterprise customers with proprietary root-level IP).
+**Standalone repo mode:** `spawn_gemini` with `isolation: "standalone"` creates a fresh `git init` repo instead of a worktree. Claude's native project discovery treats the local `.git` as the boundary — the agent cannot traverse into the parent repository. Use this for information segmentation (e.g., enterprise customers with proprietary root-level IP).
 
 **Branch naming:** `{parent_branch}.{slug}` (dot separator). PRs target parent branch, not main — merged via recursive fold up the tree.
 
@@ -296,7 +298,7 @@ Without Tempo running, spans still appear in stderr via the tracing fmt layer.
 ```
 Human in tmux session
     └── Claude Code + exomonad (Rust + Haskell WASM)
-            ├── MCP tools via WASM (fork_wave, spawn_leaf_subtree, spawn_workers, etc.)
+            ├── MCP tools via WASM (fork_wave, spawn_gemini, etc.)
             └── Agent tree:
                 ├── worktree: main.feature-a (TL role, can spawn children)
                 │   ├── worker: rust-impl (Gemini, in-place pane)
@@ -367,12 +369,11 @@ All tools implemented in Haskell WASM (`haskell/wasm-guest/src/ExoMonad/Guest/To
 
 | Tool | Role | Description |
 |------|------|-------------|
-| `fork_wave` | tl | Fork N parallel Claude agents from current conversation context, each in its own worktree. Requires clean git state. |
-| `spawn_leaf_subtree` | tl | Fork Gemini agent into worktree or standalone repo + tmux window (dev role, files PR). Supports `standalone_repo`. |
-| `spawn_workers` | tl | Spawn Gemini agents as tmux panes (ephemeral, no worktree) |
+| `fork_wave` | root, tl | Fork N parallel Claude agents, each in its own worktree. Per-child `fork_session` for context inheritance. |
+| `spawn_gemini` | root, tl | Spawn Gemini agent with isolation mode: worktree (branch+PR), inline (ephemeral pane), or standalone (own repo). |
 | `file_pr` | tl, dev | Create/update PR (auto-detects base branch from naming) |
-| `merge_pr` | tl | Merge child PR (gh merge + git fetch) |
-| `notify_parent` | all | Send message to parent agent. Auto-routed via Teams inbox (primary) or tmux STDIN (fallback) |
+| `merge_pr` | root, tl | Merge child PR (gh merge + git fetch) |
+| `notify_parent` | tl, dev, worker | Send message to parent agent. Auto-routed via Teams inbox (primary) or tmux STDIN (fallback) |
 | `send_message` | all | Send message to another exomonad-spawned agent (routes via Teams inbox, ACP, UDS, or tmux) |
 | `shutdown` | dev, worker | Gracefully exit: notify parent, close own pane |
 | `task_list` | dev, worker | List tasks from the shared Claude Code task list (auto-resolves team from TeamRegistry) |
@@ -532,8 +533,8 @@ The recursive execution pattern. Every TL at every level follows this protocol:
    - Commit and push. Children fork from this commit.
 
 2. **Fork** — Spawn wave N children. Zero deps between siblings in the same wave.
-   - Sub-TLs: `fork_wave` (Claude, full context inheritance) — they already know the plan
-   - Devs: `spawn_leaf_subtree` (Gemini, spec-only) — they get CLAUDE.md from scaffolding
+   - Sub-TLs: `fork_wave` (Claude, `fork_session: true` for context inheritance) — they already know the plan
+   - Devs: `spawn_gemini` with `isolation: "worktree"` (Gemini, spec-only) — they get CLAUDE.md from scaffolding
 
 3. **Converge** — Wait for child notifications. Merge their PRs. Write an integration commit:
    - Wire children's outputs together

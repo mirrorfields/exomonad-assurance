@@ -27,11 +27,13 @@ The guest exports MCP tools that agents can call. These are defined in `ExoMonad
 
 ### Spawn Tools (`ExoMonad.Guest.Tools.Spawn`)
 
-- **`fork_wave`**: Fork N parallel Claude agents from current conversation context, each in its own worktree. Children inherit full context and only need a slug + task. Requires clean git state.
-- **`spawn_leaf_subtree`**: Fork a Gemini agent in a new git worktree + tmux window (dev role, isolated, files PR). Supports `standalone_repo: true`.
-- **`spawn_workers`**: Spawn ephemeral Gemini agents as panes in the parent directory (no branch, no worktree).
-
-**Standalone repo mode**: `spawn_leaf_subtree` accepts `standalone_repo: true`. This creates a fresh `git init` repo instead of a worktree, providing stronger filesystem isolation for the subagent.
+- **`fork_wave`**: Fork N parallel Claude agents, each in its own worktree. Per-child `fork_session` for context inheritance (default: false). Requires clean git state.
+- **`spawn_gemini`**: Unified Gemini spawn with three isolation modes:
+  - `isolation: "worktree"` — Own branch + directory, files PR (dev role)
+  - `isolation: "inline"` — Ephemeral pane in parent directory, no branch/PR
+  - `isolation: "standalone"` — Own git repo for full filesystem isolation
+- **`spawn_leaf_subtree`** (SDK core): Lower-level worktree/standalone spawn used by `spawn_gemini`.
+- **`spawn_workers`** (SDK core): Lower-level inline pane spawn used by `spawn_gemini`.
 
 ### Task Tools (`ExoMonad.Guest.Tools.Tasks`)
 
@@ -81,7 +83,7 @@ The SDK (`wasm-guest`) exports **core I/O functions** and **shared descriptions/
 | `Tools.FilePR` | `filePRCore`, `filePRDescription`, `filePRSchema`, `FilePRArgs`, `FilePROutput` | `DevFilePR`, `TLFilePR` |
 | `Tools.Events` | `notifyParentCore`, `shutdownCore`, descriptions/schemas, `MCPTool SendMessage` | `DevNotifyParent`, `TLNotifyParent`, `WorkerNotifyParent`, `DevShutdown`, `WorkerShutdown` |
 | `Tools.MergePR` | `mergePRCore`, `mergePRRender`, description/schema, `extractSlug` | `TLMergePR` |
-| `Tools.Spawn` | `forkWaveCore`, `spawnLeafSubtreeCore`, `spawnWorkersCore`, descriptions/schemas, render functions | `TLForkWave`, `TLSpawnLeaf`, `TLSpawnWorkers` |
+| `Tools.Spawn` | `forkWaveCore`, `spawnGeminiCore`, `spawnLeafSubtreeCore`, `spawnWorkersCore`, descriptions/schemas, render functions | `TLForkWave`, `TLSpawnGemini`, `RootForkWave`, `RootSpawnGemini` |
 | `Tools.Tasks` | `taskListCore`, `taskGetCore`, `taskUpdateCore`, descriptions/schemas | `DevTaskList`, `DevTaskGet`, `DevTaskUpdate`, `WorkerTaskList`, `WorkerTaskGet`, `WorkerTaskUpdate` |
 
 `SendMessage` is the only tool with an `MCPTool` instance in the SDK (no state transitions needed).
@@ -90,9 +92,10 @@ The SDK (`wasm-guest`) exports **core I/O functions** and **shared descriptions/
 
 | Role | Tools | State Machine | Spawned by |
 |------|-------|---------------|------------|
-| **tl** | `TLForkWave`, `TLSpawnLeaf`, `TLSpawnWorkers`, `TLMergePR`, `TLFilePR`, `TLNotifyParent`, `SendMessage` | `TLPhase` (tracks children via `ChildSpawned`/`ChildCompleted`) | `fork_wave` |
-| **dev** | `DevFilePR`, `DevNotifyParent`, `SendMessage`, `DevShutdown`, `DevTaskList`, `DevTaskGet`, `DevTaskUpdate` | `DevPhase` (tracks PR lifecycle) | `spawn_leaf_subtree` |
-| **worker** | `WorkerNotifyParent`, `SendMessage`, `WorkerShutdown`, `WorkerTaskList`, `WorkerTaskGet`, `WorkerTaskUpdate` | None (ephemeral) | `spawn_workers` |
+| **root** | `RootForkWave`, `RootSpawnGemini`, `RootMergePR`, `SendMessage` | `TLPhase` (tracks children via `ChildSpawned`/`ChildCompleted`) | `exomonad init` (human-facing TL) |
+| **tl** | `TLForkWave`, `TLSpawnGemini`, `TLMergePR`, `TLFilePR`, `TLNotifyParent`, `SendMessage` | `TLPhase` | `fork_wave` |
+| **dev** | `DevFilePR`, `DevNotifyParent`, `SendMessage`, `DevShutdown`, `DevTaskList`, `DevTaskGet`, `DevTaskUpdate` | `DevPhase` (tracks PR lifecycle) | `spawn_gemini` (worktree/standalone) |
+| **worker** | `WorkerNotifyParent`, `SendMessage`, `WorkerShutdown`, `WorkerTaskList`, `WorkerTaskGet`, `WorkerTaskUpdate` | None (ephemeral) | `spawn_gemini` (inline) |
 
 ## Hooks
 

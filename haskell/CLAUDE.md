@@ -28,9 +28,11 @@ The xmonad pattern for LLM agents: users define agent roles in Haskell, compiled
 ```
 .exo/roles/devswarm/
 ├── AllRoles.hs     # Role registry: Map Text SomeRoleConfig
-├── TLRole.hs       # TL role config (spawn, PR, merge, notify_parent, send_message)
-├── DevRole.hs      # Dev role config (PR, notify_parent + permission cascade)
-├── WorkerRole.hs   # Worker role config (notify_parent only, allow-all hooks)
+├── RootRole.hs     # Root TL role (human-facing: spawn, merge, no file_pr/notify_parent)
+├── TLRole.hs       # Spawned TL role (spawn, PR, merge, notify_parent, send_message)
+├── DevRole.hs      # Dev role config (PR, notify_parent, task tools + permission cascade)
+├── WorkerRole.hs   # Worker role config (notify_parent, task tools, allow-all hooks)
+├── TLStopCheck.hs  # Shared stop-hook logic for Root and TL roles
 ├── Main.hs         # FFI exports that read role from input JSON
 └── devswarm.cabal  # Package definition
 ```
@@ -39,7 +41,7 @@ Shared code across roles lives in `.exo/lib/` (e.g., `HttpDevHooks.hs`).
 
 ### How It Works
 
-1. Role configs live in `.exo/roles/devswarm/` — one module per role (`TLRole.hs`, `DevRole.hs`, `WorkerRole.hs`)
+1. Role configs live in `.exo/roles/devswarm/` — one module per role (`RootRole.hs`, `TLRole.hs`, `DevRole.hs`, `WorkerRole.hs`)
 2. `AllRoles.hs` registers all roles in a `Map Text SomeRoleConfig`
 3. `cabal.project.wasm` lists `.exo/roles/devswarm` as a package
 4. `just wasm-all` (or `exomonad recompile --role devswarm`) builds via nix + wasm32-wasi-cabal

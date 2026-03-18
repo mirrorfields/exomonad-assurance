@@ -42,10 +42,10 @@ Human in tmux session
     └── Claude Code (main window, role=tl)
             ├── MCP server: exomonad mcp-stdio
             ├── WASM: loaded from .exo/wasm/ at runtime
-            └── spawn_subtree / spawn_leaf_subtree / spawn_workers creates:
+            └── fork_wave / spawn_gemini creates:
                 ├── Window subtree-1 (Claude, worktree off current branch, role=tl)
                 ├── Window leaf-1 (Gemini, worktree off current branch, role=dev)
-                ├── Pane worker-a (Gemini, in parent dir, ephemeral, role=dev)
+                ├── Pane worker-a (Gemini, in parent dir, ephemeral, role=worker)
                 └── ... (recursive tree of worktrees + workers)
 ```
 
@@ -58,12 +58,12 @@ Each subtree agent (`spawn_subtree`):
 - PRs target parent branch, not main — merged via recursive fold
 - Runs in tmux window with `claude 'task'` (positional arg), auto-closes on exit
 
-Each leaf subtree agent (`spawn_leaf_subtree`):
+Each leaf agent (`spawn_gemini` with worktree/standalone isolation):
 - Same worktree isolation as `spawn_subtree` (own branch, own directory)
 - Gemini — dev role (no spawn tools)
 - Runs in tmux window, files PR against parent branch
 
-Each worker agent (`spawn_workers`):
+Each worker agent (`spawn_gemini` with inline isolation):
 - Runs in a tmux pane in the parent's directory (no branch, no worktree, ephemeral)
 - Always Gemini — lightweight, focused execution
 - MCP config in `.exo/agents/{name}/settings.json`, pointed via `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
@@ -124,7 +124,7 @@ nix develop .#wasm -c wasm32-wasi-cabal build --project-file=cabal.project.wasm 
 ### Running
 ```bash
 # MCP server (stdio)
-exomonad mcp-stdio --role tl --agent-id root
+exomonad mcp-stdio --role root --agent-id root
 
 # Handle Claude Code hook
 echo '{"hook_event_name":"PreToolUse",...}' | exomonad hook pre-tool-use
@@ -151,7 +151,7 @@ In `mcp-stdio` mode, the agent's identity is passed via command-line flags: `--r
 
 Roles are defined in Haskell WASM (`AllRoles.hs`). Adding a role is a Haskell-only change — Rust uses a lazy cache that creates a `PluginManager` per role on first request.
 
-At spawn time, `spawn_subtree`/`spawn_leaf_subtree`/`spawn_workers` writes per-agent MCP config with the agent's identity flags. Identity is unforgeable and visible in logs.
+At spawn time, `fork_wave`/`spawn_gemini` writes per-agent MCP config with the agent's identity flags. Identity is unforgeable and visible in logs.
 
 ## MCP Tools
 
@@ -159,9 +159,8 @@ All tools are defined in Haskell WASM and executed via host functions.
 
 | Tool | Role | Description |
 |------|------|-------------|
-| `fork_wave` | tl | Fork N parallel Claude agents from conversation context, each in its own worktree |
-| `spawn_leaf_subtree` | tl | Fork Gemini agent into worktree + tmux window (dev role, files PR) |
-| `spawn_workers` | tl | Spawn ephemeral Gemini agents as panes in parent dir (no branch, no worktree) |
+| `fork_wave` | root, tl | Fork N parallel Claude agents, each in its own worktree |
+| `spawn_gemini` | root, tl | Spawn Gemini agent (worktree, inline, or standalone isolation) |
 | `file_pr` | tl, dev | Create/update PR for current branch (auto-detects base branch from naming) |
 | `merge_pr` | tl | Merge child PR (gh pr merge + git fetch) |
 | `notify_parent` | all | Send message to parent agent (auto-routed via Teams inbox, ACP, or tmux) |
@@ -198,12 +197,13 @@ Proto field helpers in `handlers/mod.rs`: `non_empty(String) → Option<String>`
 | `git.*` | GitHandler | get_branch, get_status, get_recent_commits, get_worktree, has_unpushed_commits, get_remote_url, get_repo_info |
 | `github.*` | GitHubHandler | list_issues, get_issue, create_pr, list_prs, get_pr_for_branch, get_pr_review_comments |
 | `log.*` | LogHandler | info, error, emit_event |
-| `agent.*` | AgentHandler | spawn_subtree, spawn_leaf_subtree, spawn_workers, spawn_gemini_teammate, cleanup_merged |
+| `agent.*` | AgentHandler | spawn_subtree, spawn_leaf_subtree, spawn_workers, cleanup_merged |
 | `fs.*` | FsHandler | read_file, write_file |
 | `file_pr.*` | FilePRHandler | file_pr |
 | `copilot.*` | CopilotHandler | wait_for_copilot_review |
 | `kv.*` | KvHandler | get, set |
-| `session.*` | SessionHandler | register_claude_id, register_team |
+| `session.*` | SessionHandler | register_claude_id, register_team, deregister_team |
+| `tasks.*` | TasksHandler | list_tasks, get_task, update_task (shared task list with team auto-resolution) |
 | `events.*` | EventHandler | wait_for_event (internal), notify_event, notify_parent, send_message |
 | `merge_pr.*` | MergePRHandler | merge_pr (gh pr merge + git fetch) |
 | `process.*` | ProcessHandler | run (execute command with args, env, working dir, timeout) |
