@@ -90,3 +90,8 @@ tests/integration/external-consumer/.exo/wasm/
 
 # try-exomonad/ pre-built artifacts (staged by run.sh from host)
 try-exomonad/artifacts/
+
+# Vendored NotebookLM MCP (build artifacts and secrets)
+vendor/notebooklm-mcp/node_modules/
+vendor/notebooklm-mcp/dist/
+vendor/notebooklm-mcp/.env

@@ -191,7 +191,15 @@ use std::io::{IsTerminal, Write};
             }),
         );
         for (name, server) in &config.extra_mcp_servers {
-            mcp_servers.insert(name.clone(), serde_json::json!({ "httpUrl": server.url }));
+            let entry = match server {
+                exomonad::config::McpServerConfig::Http { url, .. } => {
+                    serde_json::json!({ "httpUrl": url })
+                }
+                exomonad::config::McpServerConfig::Stdio { command, args } => {
+                    serde_json::json!({"type": "stdio", "command": command, "args": args})
+                }
+            };
+            mcp_servers.insert(name.clone(), entry);
         }
 
         let settings = serde_json::json!({ "mcpServers": mcp_servers });
@@ -277,13 +285,18 @@ use std::io::{IsTerminal, Write};
 
     // Add extra MCP servers from config
     for (name, server) in &config.extra_mcp_servers {
-        let mut entry = serde_json::json!({
-            "type": "http",
-            "url": server.url,
-        });
-        if !server.headers.is_empty() {
-            entry["headers"] = serde_json::to_value(&server.headers)?;
-        }
+        let entry = match server {
+            exomonad::config::McpServerConfig::Http { url, headers } => {
+                let mut e = serde_json::json!({"type": "http", "url": url});
+                if !headers.is_empty() {
+                    e["headers"] = serde_json::to_value(headers)?;
+                }
+                e
+            }
+            exomonad::config::McpServerConfig::Stdio { command, args } => {
+                serde_json::json!({"type": "stdio", "command": command, "args": args})
+            }
+        };
         mcp_servers.insert(name.clone(), entry);
     }
 

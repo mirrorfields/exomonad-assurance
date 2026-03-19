@@ -7,14 +7,22 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-/// External MCP server configuration.
+/// External MCP server configuration (HTTP or stdio).
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct McpServerConfig {
-    /// HTTP URL for the MCP server.
-    pub url: String,
-    /// Optional HTTP headers (e.g. Authorization).
-    #[serde(default)]
-    pub headers: std::collections::HashMap<String, String>,
+#[serde(tag = "type")]
+pub enum McpServerConfig {
+    #[serde(rename = "http")]
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+    },
+    #[serde(rename = "stdio")]
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
 }
 
 /// Raw configuration from file (supports both config.toml and config.local.toml fields).
@@ -379,5 +387,42 @@ mod tests {
         "#;
         let raw: RawConfig = toml::from_str(content).unwrap();
         assert_eq!(raw.tmux_session, Some("exomonad".to_string()));
+    }
+
+    #[test]
+    fn test_extra_mcp_servers_http() {
+        let content = r#"
+            [extra_mcp_servers.metacog]
+            type = "http"
+            url = "http://localhost:8080"
+        "#;
+        let raw: RawConfig = toml::from_str(content).unwrap();
+        assert!(raw.extra_mcp_servers.contains_key("metacog"));
+        match &raw.extra_mcp_servers["metacog"] {
+            McpServerConfig::Http { url, headers } => {
+                assert_eq!(url, "http://localhost:8080");
+                assert!(headers.is_empty());
+            }
+            _ => panic!("Expected Http variant"),
+        }
+    }
+
+    #[test]
+    fn test_extra_mcp_servers_stdio() {
+        let content = r#"
+            [extra_mcp_servers.notebooklm]
+            type = "stdio"
+            command = "node"
+            args = ["vendor/notebooklm-mcp/dist/index.js"]
+        "#;
+        let raw: RawConfig = toml::from_str(content).unwrap();
+        assert!(raw.extra_mcp_servers.contains_key("notebooklm"));
+        match &raw.extra_mcp_servers["notebooklm"] {
+            McpServerConfig::Stdio { command, args } => {
+                assert_eq!(command, "node");
+                assert_eq!(args, &["vendor/notebooklm-mcp/dist/index.js"]);
+            }
+            _ => panic!("Expected Stdio variant"),
+        }
     }
 }
