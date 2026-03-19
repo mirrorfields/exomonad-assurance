@@ -208,6 +208,16 @@ project_dir = "."
 shell_command = "nix develop" # environment wrapper for TL tab + server
 wasm_dir = ".exo/wasm"       # project-local (default), override for shared installs
 wasm_name = "devswarm"       # auto-detected from .exo/roles/ if exactly one role exists
+
+# Extra MCP servers (HTTP or stdio). Included in .mcp.json for all agents.
+[extra_mcp_servers.metacog]
+type = "http"
+url = "http://localhost:8080"
+
+[extra_mcp_servers.notebooklm]
+type = "stdio"
+command = "notebooklm-mcp"
+args = []
 ```
 
 **Config hierarchy:**
@@ -287,6 +297,7 @@ This is **native Claude Code Teams integration**. Messages from child agents arr
 | **OTel observability** | **Built.** Axum middleware auto-attributes every agent request span with `agent_id`, `agent.role`, `agent.parent`, `swarm.run_id`. `swarm.run_id` persisted to `.exo/run_id`, set as OTel resource attribute, propagated to children via env. Query all spans in a run: `resource.swarm.run_id = '{id}'`. Reconstruct spawn tree: `groupBy agent.parent, agent_id`. |
 | **Coordination mutexes** | Built. In-memory `MutexRegistry` with FIFO wait queues, TTL auto-expiry, idempotent acquire. Effect-only (`coordination.acquire_mutex`, `coordination.release_mutex`) — no MCP tool exposed. |
 | **Tempo observability** | **Built.** Grafana Tempo for lightweight trace storage (~100-200MB RAM). Agents query traces via `curl` + TraceQL against Tempo's HTTP API (port 3200). Optional Grafana UI at `http://localhost:3000`. |
+| **NotebookLM MCP** (optional) | **Vendored.** `vendor/notebooklm-mcp/` — stdio MCP server that automates Google NotebookLM via browser automation. Source-grounded, citation-backed answers from uploaded documentation. Opt-in via `extra_mcp_servers` in `config.toml`. |
 
 ### Tempo Observability
 

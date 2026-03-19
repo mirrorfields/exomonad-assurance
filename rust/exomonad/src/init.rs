@@ -142,6 +142,24 @@ use std::io::{IsTerminal, Write};
         }
     }
 
+    // Write root agent birth branch so fork_wave resolves the correct parent prefix.
+    // Without this, BirthBranch::root() falls back to `git branch --show-current` in the
+    // server process CWD, which may differ from the TL's actual branch.
+    {
+        let root_agent_dir = cwd.join(".exo/agents/root");
+        std::fs::create_dir_all(&root_agent_dir)?;
+        let current_branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "main".to_string());
+        std::fs::write(root_agent_dir.join(".birth_branch"), &current_branch)?;
+        info!(branch = %current_branch, "Wrote root agent birth branch");
+    }
+
     // Write hook configuration (SessionStart registers Claude UUID for --fork-session)
     let binary_path = exomonad_core::find_exomonad_binary();
     exomonad_core::hooks::HookConfig::write_persistent(&cwd, &binary_path, None)
@@ -191,7 +209,15 @@ use std::io::{IsTerminal, Write};
             }),
         );
         for (name, server) in &config.extra_mcp_servers {
-            mcp_servers.insert(name.clone(), serde_json::json!({ "httpUrl": server.url }));
+            let entry = match server {
+                exomonad::config::McpServerConfig::Http { url, .. } => {
+                    serde_json::json!({ "httpUrl": url })
+                }
+                exomonad::config::McpServerConfig::Stdio { command, args } => {
+                    serde_json::json!({"type": "stdio", "command": command, "args": args})
+                }
+            };
+            mcp_servers.insert(name.clone(), entry);
         }
 
         let settings = serde_json::json!({ "mcpServers": mcp_servers });
@@ -277,13 +303,18 @@ use std::io::{IsTerminal, Write};
 
     // Add extra MCP servers from config
     for (name, server) in &config.extra_mcp_servers {
-        let mut entry = serde_json::json!({
-            "type": "http",
-            "url": server.url,
-        });
-        if !server.headers.is_empty() {
-            entry["headers"] = serde_json::to_value(&server.headers)?;
-        }
+        let entry = match server {
+            exomonad::config::McpServerConfig::Http { url, headers } => {
+                let mut e = serde_json::json!({"type": "http", "url": url});
+                if !headers.is_empty() {
+                    e["headers"] = serde_json::to_value(headers)?;
+                }
+                e
+            }
+            exomonad::config::McpServerConfig::Stdio { command, args } => {
+                serde_json::json!({"type": "stdio", "command": command, "args": args})
+            }
+        };
         mcp_servers.insert(name.clone(), entry);
     }
 
