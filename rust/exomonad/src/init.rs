@@ -7,9 +7,9 @@ use tracing::{debug, info, warn};
 
 /// Run the init command: create or attach to tmux session.
 pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()> {
-use exomonad_core::services::tmux_ipc::TmuxIpc;
-use exomonad_core::services::AgentType;
-use std::io::{IsTerminal, Write};
+    use exomonad_core::services::tmux_ipc::TmuxIpc;
+    use exomonad_core::services::AgentType;
+    use std::io::{IsTerminal, Write};
     let cwd = std::env::current_dir()?;
     let config_path = cwd.join(".exo/config.toml");
     if !config_path.exists() {
@@ -399,12 +399,16 @@ use std::io::{IsTerminal, Write};
     }
 
     // Create "TL" window
-    let base_command = match (config.root_agent_type, config.initial_prompt.as_deref()) {
-        (AgentType::Claude, _) => "claude --dangerously-skip-permissions -c || claude --dangerously-skip-permissions; echo; echo [Claude Code exited]; exec bash -l".to_string(),
-        (AgentType::Gemini, Some(prompt)) => format!("gemini --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
-        (AgentType::Gemini, None) => "gemini".to_string(),
-        (AgentType::Shoal, Some(prompt)) => format!("shoal-agent --prompt '{}'", prompt.replace('\'', "'\\''")),
-        (AgentType::Shoal, None) => "shoal-agent".to_string(),
+    let base_command = if let Some(ref cmd) = config.root_command {
+        cmd.clone()
+    } else {
+        match (config.root_agent_type, config.initial_prompt.as_deref()) {
+            (AgentType::Claude, _) => "claude --dangerously-skip-permissions -c || claude --dangerously-skip-permissions; echo; echo [Claude Code exited]; exec bash -l".to_string(),
+            (AgentType::Gemini, Some(prompt)) => format!("gemini --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
+            (AgentType::Gemini, None) => "gemini".to_string(),
+            (AgentType::Shoal, Some(prompt)) => format!("shoal-agent --exo root --prompt '{}'", prompt.replace('\'', "'\\''")),
+            (AgentType::Shoal, None) => "shoal-agent --exo root".to_string(),
+        }
     };
 
     let tl_command = match config.shell_command {
@@ -420,14 +424,31 @@ use std::io::{IsTerminal, Write};
     // 5. Spawn companion agents
     for companion in &config.companions {
         // Validate companion name (alphanumeric, hyphens, underscores only)
-        if !companion.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !companion
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             anyhow::bail!(
                 "Invalid companion name '{}': must contain only [A-Za-z0-9_-]",
                 companion.name
             );
         }
 
-        info!(name = %companion.name, role = %companion.role, "Spawning companion agent");
+        // Resolve agent_type: explicit or default to Claude with warning
+        let agent_type = match companion.agent_type {
+            Some(t) => t,
+            None => {
+                warn!(
+                    name = %companion.name,
+                    "Companion '{}' missing agent_type, defaulting to claude. Add agent_type = \"claude\" to silence this warning.",
+                    companion.name
+                );
+                AgentType::Claude
+            }
+        };
+
+        info!(name = %companion.name, role = %companion.role, agent_type = ?agent_type, "Spawning companion agent");
 
         // Create agent identity directory
         let agent_dir = cwd.join(".exo/agents").join(&companion.name);
@@ -437,7 +458,7 @@ use std::io::{IsTerminal, Write};
         // (companions run in the project root, not in a worktree)
         std::fs::write(agent_dir.join(".birth_branch"), &companion.name)?;
 
-        // Write .mcp.json for companion
+        // Write MCP config for companion (format depends on agent type)
         let companion_mcp = serde_json::json!({
             "mcpServers": {
                 "exomonad": {
@@ -447,22 +468,64 @@ use std::io::{IsTerminal, Write};
                 }
             }
         });
-        std::fs::write(
-            agent_dir.join(".mcp.json"),
-            serde_json::to_string_pretty(&companion_mcp)?,
-        )?;
 
-        // Write hook config for companion
-        exomonad_core::hooks::HookConfig::write_persistent(&agent_dir, &binary_path, None)
-            .context("Failed to write companion hook configuration")?;
+        match agent_type {
+            AgentType::Claude => {
+                // Claude uses .mcp.json pointed to via --mcp-config flag
+                std::fs::write(
+                    agent_dir.join(".mcp.json"),
+                    serde_json::to_string_pretty(&companion_mcp)?,
+                )?;
+            }
+            AgentType::Gemini => {
+                // Gemini uses settings.json pointed to via GEMINI_CLI_SYSTEM_SETTINGS_PATH
+                let settings = serde_json::json!({
+                    "mcpServers": companion_mcp["mcpServers"]
+                });
+                std::fs::write(
+                    agent_dir.join("settings.json"),
+                    serde_json::to_string_pretty(&settings)?,
+                )?;
+            }
+            AgentType::Shoal => {
+                // Shoal agents connect via --exo flag, no .mcp.json needed
+            }
+        }
 
-        // Create tmux window for companion
-        let companion_cmd = format!(
-            "{} '{}'",
-            companion.command,
-            companion.task.replace('\'', "'\\''")
-        );
-        let window_id = ipc.new_window(&companion.name, &cwd, &shell, &companion_cmd).await?;
+        // Write hook config for companion (Claude hooks)
+        if agent_type == AgentType::Claude {
+            exomonad_core::hooks::HookConfig::write_persistent(&agent_dir, &binary_path, None)
+                .context("Failed to write companion hook configuration")?;
+        }
+
+        // Build command per agent type to ensure correct MCP config discovery
+        let escaped_task = companion.task.replace('\'', "'\\''");
+        let companion_cmd = match agent_type {
+            AgentType::Claude => {
+                let mcp_config = agent_dir.join(".mcp.json");
+                format!(
+                    "{} --strict-mcp-config --mcp-config {} '{}'",
+                    companion.command,
+                    mcp_config.display(),
+                    escaped_task
+                )
+            }
+            AgentType::Gemini => {
+                let settings = agent_dir.join("settings.json");
+                format!(
+                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH={} {} '{}'",
+                    settings.display(),
+                    companion.command,
+                    escaped_task
+                )
+            }
+            AgentType::Shoal => {
+                format!("{} '{}'", companion.command, escaped_task)
+            }
+        };
+        let window_id = ipc
+            .new_window(&companion.name, &cwd, &shell, &companion_cmd)
+            .await?;
 
         // Write routing.json with window_id
         let routing = serde_json::json!({

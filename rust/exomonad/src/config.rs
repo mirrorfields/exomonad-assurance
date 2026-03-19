@@ -33,6 +33,9 @@ pub struct CompanionConfig {
     /// WASM role for MCP tools (default: "worker").
     #[serde(default = "default_companion_role")]
     pub role: String,
+    /// Agent type. Determines how MCP config is wired.
+    /// Optional at parse time; init warns and defaults to Claude if missing.
+    pub agent_type: Option<AgentType>,
     /// Command to launch (e.g., "claude --dangerously-skip-permissions -c").
     pub command: String,
     /// Task/prompt passed as positional arg to the command.
@@ -83,6 +86,10 @@ pub struct RawConfig {
     /// Initial prompt for the root agent (used with `gemini --prompt-interactive`).
     pub initial_prompt: Option<String>,
 
+    /// Custom command for the root TL window (overrides agent_type-based default).
+    /// Use for development (e.g., `cargo run -p shoal-agent -- --exo root`).
+    pub root_command: Option<String>,
+
     /// When true, spawned Gemini agents receive `--yolo` flag.
     #[serde(default)]
     pub yolo: bool,
@@ -123,6 +130,8 @@ pub struct Config {
     pub yolo: bool,
     /// Companion agents to spawn alongside the TL.
     pub companions: Vec<CompanionConfig>,
+    /// Custom command for the root TL window (overrides agent_type-based default).
+    pub root_command: Option<String>,
     /// OTLP gRPC endpoint (e.g. "http://localhost:4317").
     /// If absent, OTel export is disabled (fmt-only tracing).
     pub otlp_endpoint: Option<String>,
@@ -248,6 +257,9 @@ impl Config {
             global_raw.companions
         };
 
+        // Resolve root_command: local > global
+        let root_command = local_raw.root_command.or(global_raw.root_command);
+
         // Resolve otlp_endpoint: local > global
         let otlp_endpoint = local_raw.otlp_endpoint.or(global_raw.otlp_endpoint);
 
@@ -265,6 +277,7 @@ impl Config {
             initial_prompt,
             yolo,
             companions,
+            root_command,
             otlp_endpoint,
         })
     }
@@ -297,6 +310,7 @@ impl Default for Config {
             initial_prompt: None,
             yolo: false,
             companions: Vec::new(),
+            root_command: None,
             otlp_endpoint: None,
         }
     }
@@ -459,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_config_parse_companions() {
+    fn test_raw_config_parse_companions_without_agent_type() {
         let content = r#"
             [[companions]]
             name = "sleeptime"
@@ -470,5 +484,27 @@ mod tests {
         assert_eq!(raw.companions.len(), 1);
         assert_eq!(raw.companions[0].name, "sleeptime");
         assert_eq!(raw.companions[0].role, "worker");
+        assert!(raw.companions[0].agent_type.is_none());
+    }
+
+    #[test]
+    fn test_raw_config_parse_companions_with_agent_type() {
+        let content = r#"
+            [[companions]]
+            name = "sleeptime"
+            agent_type = "claude"
+            command = "claude -c"
+            task = "You are sleeptime"
+
+            [[companions]]
+            name = "researcher"
+            agent_type = "gemini"
+            command = "gemini"
+            task = "Research task"
+        "#;
+        let raw: RawConfig = toml::from_str(content).unwrap();
+        assert_eq!(raw.companions.len(), 2);
+        assert_eq!(raw.companions[0].agent_type, Some(AgentType::Claude));
+        assert_eq!(raw.companions[1].agent_type, Some(AgentType::Gemini));
     }
 }
