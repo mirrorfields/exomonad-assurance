@@ -7,9 +7,9 @@ use tracing::{debug, info, warn};
 
 /// Run the init command: create or attach to tmux session.
 pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()> {
-use exomonad_core::services::tmux_ipc::TmuxIpc;
-use exomonad_core::services::AgentType;
-use std::io::{IsTerminal, Write};
+    use exomonad_core::services::tmux_ipc::TmuxIpc;
+    use exomonad_core::services::AgentType;
+    use std::io::{IsTerminal, Write};
     let cwd = std::env::current_dir()?;
     let config_path = cwd.join(".exo/config.toml");
     if !config_path.exists() {
@@ -399,12 +399,16 @@ use std::io::{IsTerminal, Write};
     }
 
     // Create "TL" window
-    let base_command = match (config.root_agent_type, config.initial_prompt.as_deref()) {
-        (AgentType::Claude, _) => "claude --dangerously-skip-permissions -c || claude --dangerously-skip-permissions; echo; echo [Claude Code exited]; exec bash -l".to_string(),
-        (AgentType::Gemini, Some(prompt)) => format!("gemini --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
-        (AgentType::Gemini, None) => "gemini".to_string(),
-        (AgentType::Shoal, Some(prompt)) => format!("shoal-agent --prompt '{}'", prompt.replace('\'', "'\\''")),
-        (AgentType::Shoal, None) => "shoal-agent".to_string(),
+    let base_command = if let Some(ref cmd) = config.root_command {
+        cmd.clone()
+    } else {
+        match (config.root_agent_type, config.initial_prompt.as_deref()) {
+            (AgentType::Claude, _) => "claude --dangerously-skip-permissions -c || claude --dangerously-skip-permissions; echo; echo [Claude Code exited]; exec bash -l".to_string(),
+            (AgentType::Gemini, Some(prompt)) => format!("gemini --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
+            (AgentType::Gemini, None) => "gemini".to_string(),
+            (AgentType::Shoal, Some(prompt)) => format!("shoal-agent --exo root --prompt '{}'", prompt.replace('\'', "'\\''")),
+            (AgentType::Shoal, None) => "shoal-agent --exo root".to_string(),
+        }
     };
 
     let tl_command = match config.shell_command {
@@ -420,49 +424,244 @@ use std::io::{IsTerminal, Write};
     // 5. Spawn companion agents
     for companion in &config.companions {
         // Validate companion name (alphanumeric, hyphens, underscores only)
-        if !companion.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !companion
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             anyhow::bail!(
                 "Invalid companion name '{}': must contain only [A-Za-z0-9_-]",
                 companion.name
             );
         }
 
-        info!(name = %companion.name, role = %companion.role, "Spawning companion agent");
+        // Resolve agent_type: explicit or default to Claude with warning
+        let agent_type = match companion.agent_type {
+            Some(t) => t,
+            None => {
+                warn!(
+                    name = %companion.name,
+                    "Companion '{}' missing agent_type, defaulting to claude. Add agent_type = \"claude\" to silence this warning.",
+                    companion.name
+                );
+                AgentType::Claude
+            }
+        };
+
+        info!(name = %companion.name, role = %companion.role, agent_type = ?agent_type, "Spawning companion agent");
 
         // Create agent identity directory
         let agent_dir = cwd.join(".exo/agents").join(&companion.name);
         std::fs::create_dir_all(&agent_dir)?;
 
-        // Write birth_branch identity — no dots, so resolve_working_dir returns "."
-        // (companions run in the project root, not in a worktree)
+        // Write birth_branch identity
         std::fs::write(agent_dir.join(".birth_branch"), &companion.name)?;
 
-        // Write .mcp.json for companion
-        let companion_mcp = serde_json::json!({
-            "mcpServers": {
-                "exomonad": {
+        // Determine CWD for the companion window
+        let companion_cwd = if agent_type == AgentType::Claude {
+            // Claude companions get their own git worktree for isolated .mcp.json discovery
+            let worktree_path = cwd.join(".exo/companions").join(&companion.name);
+            let branch_name = format!("companion/{}", companion.name);
+
+            if !worktree_path.exists() {
+                // Ensure HEAD exists — worktree creation needs a valid ref
+                let head_valid = std::process::Command::new("git")
+                    .args(["rev-parse", "--verify", "HEAD"])
+                    .current_dir(&cwd)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                if !head_valid {
+                    info!("No commits in repo, creating initial commit for worktree support");
+                    let _ = std::process::Command::new("git")
+                        .args(["commit", "--allow-empty", "-m", "initial commit"])
+                        .current_dir(&cwd)
+                        .output();
+                }
+
+                // Create worktree (reuse branch if it already exists)
+                let branch_exists = std::process::Command::new("git")
+                    .args(["rev-parse", "--verify", &branch_name])
+                    .current_dir(&cwd)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                std::fs::create_dir_all(cwd.join(".exo/companions"))?;
+
+                let worktree_result = if branch_exists {
+                    std::process::Command::new("git")
+                        .args(["worktree", "add"])
+                        .arg(&worktree_path)
+                        .arg(&branch_name)
+                        .current_dir(&cwd)
+                        .output()
+                } else {
+                    std::process::Command::new("git")
+                        .args(["worktree", "add", "-b", &branch_name])
+                        .arg(&worktree_path)
+                        .arg("HEAD")
+                        .current_dir(&cwd)
+                        .output()
+                };
+
+                match worktree_result {
+                    Ok(output) if output.status.success() => {
+                        info!(
+                            name = %companion.name,
+                            path = %worktree_path.display(),
+                            branch = %branch_name,
+                            "Created companion worktree"
+                        );
+                    }
+                    Ok(output) => {
+                        anyhow::bail!(
+                            "Failed to create worktree for companion '{}': {}",
+                            companion.name,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        anyhow::bail!(
+                            "Failed to run git worktree add for companion '{}': {}",
+                            companion.name,
+                            e
+                        );
+                    }
+                }
+            } else {
+                info!(
+                    name = %companion.name,
+                    path = %worktree_path.display(),
+                    "Reusing existing companion worktree"
+                );
+            }
+
+            // Write .mcp.json to worktree root — Claude discovers via CWD
+            let mut companion_mcp_servers = serde_json::Map::new();
+            companion_mcp_servers.insert(
+                "exomonad".to_string(),
+                serde_json::json!({
                     "type": "stdio",
                     "command": "exomonad",
                     "args": ["mcp-stdio", "--role", &companion.role, "--name", &companion.name]
-                }
+                }),
+            );
+            // Include extra MCP servers from config
+            for (name, server) in &config.extra_mcp_servers {
+                let entry = match server {
+                    exomonad::config::McpServerConfig::Http { url, headers } => {
+                        let mut e = serde_json::json!({"type": "http", "url": url});
+                        if !headers.is_empty() {
+                            e["headers"] = serde_json::to_value(headers)?;
+                        }
+                        e
+                    }
+                    exomonad::config::McpServerConfig::Stdio { command, args } => {
+                        serde_json::json!({"type": "stdio", "command": command, "args": args})
+                    }
+                };
+                companion_mcp_servers.insert(name.clone(), entry);
             }
-        });
-        std::fs::write(
-            agent_dir.join(".mcp.json"),
-            serde_json::to_string_pretty(&companion_mcp)?,
-        )?;
+            let companion_mcp_json = serde_json::json!({ "mcpServers": companion_mcp_servers });
+            std::fs::write(
+                worktree_path.join(".mcp.json"),
+                serde_json::to_string_pretty(&companion_mcp_json)?,
+            )?;
 
-        // Write hook config for companion
-        exomonad_core::hooks::HookConfig::write_persistent(&agent_dir, &binary_path, None)
+            // Write .claude/settings.local.json to worktree root (hooks)
+            exomonad_core::hooks::HookConfig::write_persistent(
+                &worktree_path,
+                &binary_path,
+                None,
+            )
             .context("Failed to write companion hook configuration")?;
 
-        // Create tmux window for companion
-        let companion_cmd = format!(
-            "{} '{}'",
-            companion.command,
-            companion.task.replace('\'', "'\\''")
-        );
-        let window_id = ipc.new_window(&companion.name, &cwd, &shell, &companion_cmd).await?;
+            // Symlink server socket into worktree's .exo/
+            let worktree_exo = worktree_path.join(".exo");
+            std::fs::create_dir_all(&worktree_exo)?;
+            let socket_target = worktree_exo.join("server.sock");
+            let _ = std::fs::remove_file(&socket_target);
+            let socket_source = cwd.join(".exo/server.sock");
+            std::os::unix::fs::symlink(&socket_source, &socket_target)?;
+            info!(
+                source = %socket_source.display(),
+                target = %socket_target.display(),
+                "Symlinked server socket into companion worktree"
+            );
+
+            worktree_path
+        } else {
+            // Gemini/Shoal companions use project root CWD
+            let companion_mcp = serde_json::json!({
+                "mcpServers": {
+                    "exomonad": {
+                        "type": "stdio",
+                        "command": "exomonad",
+                        "args": ["mcp-stdio", "--role", &companion.role, "--name", &companion.name]
+                    }
+                }
+            });
+
+            match agent_type {
+                AgentType::Gemini => {
+                    let settings = serde_json::json!({
+                        "mcpServers": companion_mcp["mcpServers"]
+                    });
+                    std::fs::write(
+                        agent_dir.join("settings.json"),
+                        serde_json::to_string_pretty(&settings)?,
+                    )?;
+                }
+                AgentType::Shoal => {}
+                AgentType::Claude => unreachable!(),
+            }
+
+            cwd.clone()
+        };
+
+        // Build command per agent type
+        let escaped_task = companion
+            .task
+            .as_deref()
+            .map(|t| t.replace('\'', "'\\''"));
+        let companion_cmd = match agent_type {
+            AgentType::Claude => {
+                // Pure CWD discovery — no --mcp-config, no --strict-mcp-config
+                let task_part = match &escaped_task {
+                    Some(t) => format!(" '{}'", t),
+                    None => String::new(),
+                };
+                format!(
+                    "{}{task_part}; echo; echo '[{} exited]'; exec bash -l",
+                    companion.command, companion.name
+                )
+            }
+            AgentType::Gemini => {
+                let settings = agent_dir.join("settings.json");
+                let task_part = match &escaped_task {
+                    Some(t) => format!(" '{}'", t),
+                    None => String::new(),
+                };
+                format!(
+                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH={} {}{}",
+                    settings.display(),
+                    companion.command,
+                    task_part
+                )
+            }
+            AgentType::Shoal => {
+                let task_part = match &escaped_task {
+                    Some(t) => format!(" '{}'", t),
+                    None => String::new(),
+                };
+                format!("{}{}", companion.command, task_part)
+            }
+        };
+        let window_id = ipc
+            .new_window(&companion.name, &companion_cwd, &shell, &companion_cmd)
+            .await?;
 
         // Write routing.json with window_id
         let routing = serde_json::json!({
