@@ -142,6 +142,24 @@ use std::io::{IsTerminal, Write};
         }
     }
 
+    // Write root agent birth branch so fork_wave resolves the correct parent prefix.
+    // Without this, BirthBranch::root() falls back to `git branch --show-current` in the
+    // server process CWD, which may differ from the TL's actual branch.
+    {
+        let root_agent_dir = cwd.join(".exo/agents/root");
+        std::fs::create_dir_all(&root_agent_dir)?;
+        let current_branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "main".to_string());
+        std::fs::write(root_agent_dir.join(".birth_branch"), &current_branch)?;
+        info!(branch = %current_branch, "Wrote root agent birth branch");
+    }
+
     // Write hook configuration (SessionStart registers Claude UUID for --fork-session)
     let binary_path = exomonad_core::find_exomonad_binary();
     exomonad_core::hooks::HookConfig::write_persistent(&cwd, &binary_path, None)
