@@ -561,18 +561,18 @@ impl AgentControlService {
 
             let role = options.role.as_deref().unwrap_or("tl");
 
-            // Symlink role context for Claude subtree
+            // Copy role context into Claude subtree's rules dir.
+            // Must be a copy, not a symlink — symlinks escape the worktree boundary
+            // and cause Claude Code to discover parent context files.
             if agent_type == AgentType::Claude {
                 if let Some(context_src) = self.resolve_role_context(role) {
                     let rules_dir = worktree_path.join(".claude/rules");
                     let _ = fs::create_dir_all(&rules_dir).await;
-                    let link = rules_dir.join("exomonad_role.md");
-                    let _ = fs::remove_file(&link).await;
-                    let relative = pathdiff::diff_paths(&context_src, &rules_dir)
-                        .unwrap_or(context_src.clone());
-                    match tokio::fs::symlink(&relative, &link).await {
-                        Ok(()) => info!(role = %role, link = %link.display(), "Symlinked role context in worktree"),
-                        Err(e) => warn!(role = %role, error = %e, "Failed to symlink role context (non-fatal)"),
+                    let dest = rules_dir.join("exomonad_role.md");
+                    let _ = fs::remove_file(&dest).await;
+                    match fs::copy(&context_src, &dest).await {
+                        Ok(_) => info!(role = %role, src = %context_src.display(), dest = %dest.display(), "Copied role context into worktree"),
+                        Err(e) => warn!(role = %role, error = %e, "Failed to copy role context (non-fatal)"),
                     }
                 }
             }

@@ -593,19 +593,19 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
             )
             .context("Failed to write companion hook configuration")?;
 
-            // Symlink role context for Claude companion
+            // Copy role context into companion's rules dir.
+            // Must be a copy, not a symlink — symlinks escape the worktree boundary
+            // and cause Claude Code to discover parent context files.
             {
                 let context_source = resolve_role_context_path(&cwd, &config.wasm_name, &companion.role);
                 if let Some(src) = context_source {
                     let rules_dir = worktree_path.join(".claude/rules");
                     let _ = std::fs::create_dir_all(&rules_dir);
-                    let link = rules_dir.join("exomonad_role.md");
-                    let _ = std::fs::remove_file(&link); // idempotent
-                    let relative = pathdiff::diff_paths(&src, &rules_dir)
-                        .unwrap_or(src.clone());
-                    match std::os::unix::fs::symlink(&relative, &link) {
-                        Ok(()) => info!(name = %companion.name, src = %src.display(), link = %link.display(), "Symlinked role context for companion"),
-                        Err(e) => warn!(name = %companion.name, error = %e, "Failed to symlink role context (non-fatal)"),
+                    let dest = rules_dir.join("exomonad_role.md");
+                    let _ = std::fs::remove_file(&dest); // idempotent
+                    match std::fs::copy(&src, &dest) {
+                        Ok(_) => info!(name = %companion.name, src = %src.display(), dest = %dest.display(), "Copied role context for companion"),
+                        Err(e) => warn!(name = %companion.name, error = %e, "Failed to copy role context (non-fatal)"),
                     }
                 }
             }

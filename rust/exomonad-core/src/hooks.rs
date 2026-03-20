@@ -147,13 +147,10 @@ impl HookConfig {
             settings["permissions"] = perm_obj;
         }
 
-        // Workaround for Claude Code bug #16600: worktrees nested inside a parent
-        // project inherit the parent's CLAUDE.md and .claude/rules/ because Claude
-        // Code doesn't recognize .git files (worktree pointers) as project boundaries.
-        // Exclude the parent's context files so the child only loads its own.
+        // Exclude parent project's context files from worktree children.
+        // Without this, Claude Code's upward directory walk loads the parent's
+        // CLAUDE.md and rules alongside the child's own copies.
         if let Some(parent_dir) = parent_project_dir {
-            // Canonicalize to resolve any `.` or `..` segments — glob matching
-            // requires clean absolute paths.
             let canonical = parent_dir.canonicalize().unwrap_or(parent_dir.to_path_buf());
             let parent = canonical.to_string_lossy();
             settings["claudeMdExcludes"] = json!([
