@@ -88,6 +88,9 @@ tests/integration/external-consumer/.exo/wasm/
 .jj/
 .gemini/settings.json
 
+# Generated symlinks (provisioned by init/spawn, source in .exo/roles/)
+.claude/rules/exomonad_*.md
+
 # try-exomonad/ pre-built artifacts (staged by run.sh from host)
 try-exomonad/artifacts/
 
