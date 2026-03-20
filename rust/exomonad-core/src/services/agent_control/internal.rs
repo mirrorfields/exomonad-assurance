@@ -499,11 +499,14 @@ impl AgentControlService {
     /// Resolve role context file with two-tier fallback: project-local > global.
     pub(crate) fn resolve_role_context(&self, role: &str) -> Option<PathBuf> {
         let local = self.project_dir.join(format!(".exo/roles/{}/context/{}.md", self.wasm_name, role));
+        tracing::info!(path = %local.display(), exists = local.exists(), role = %role, wasm_name = %self.wasm_name, "resolve_role_context: checking local");
         if local.exists() { return Some(local); }
         if let Ok(home) = std::env::var("HOME") {
             let global = PathBuf::from(home).join(format!(".exo/roles/{}/context/{}.md", self.wasm_name, role));
+            tracing::info!(path = %global.display(), exists = global.exists(), "resolve_role_context: checking global");
             if global.exists() { return Some(global); }
         }
+        tracing::warn!(role = %role, wasm_name = %self.wasm_name, "resolve_role_context: no context file found");
         None
     }
 
