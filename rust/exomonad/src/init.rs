@@ -162,7 +162,7 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
 
     // Write hook configuration (SessionStart registers Claude UUID for --fork-session)
     let binary_path = exomonad_core::find_exomonad_binary();
-    exomonad_core::hooks::HookConfig::write_persistent(&cwd, &binary_path, None)
+    exomonad_core::hooks::HookConfig::write_persistent(&cwd, &binary_path, None, None)
         .context("Failed to write hook configuration")?;
     info!("Hook configuration written to .claude/settings.local.json");
 
@@ -589,6 +589,7 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                 &worktree_path,
                 &binary_path,
                 None,
+                Some(&cwd),
             )
             .context("Failed to write companion hook configuration")?;
 

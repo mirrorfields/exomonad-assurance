@@ -588,7 +588,7 @@ impl AgentControlService {
 
             // Write .claude/settings.local.json with hooks (SessionStart registers UUID for --fork-session)
             let binary_path = crate::util::find_exomonad_binary();
-            crate::hooks::HookConfig::write_persistent(&worktree_path, &binary_path, options.permissions.as_ref())
+            crate::hooks::HookConfig::write_persistent(&worktree_path, &binary_path, options.permissions.as_ref(), Some(&self.project_dir))
                 .map_err(|e| anyhow!("Failed to write hook config in worktree: {}", e))?;
             info!(worktree = %worktree_path.display(), "Wrote hook configuration for spawned Claude agent");
 

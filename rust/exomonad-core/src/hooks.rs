@@ -90,6 +90,7 @@ impl HookConfig {
         cwd: &Path,
         binary_path: &Path,
         permissions: Option<&crate::domain::AgentPermissions>,
+        parent_project_dir: Option<&Path>,
     ) -> Result<()> {
         let claude_dir = cwd.join(".claude");
         let settings_path = claude_dir.join("settings.local.json");
@@ -144,6 +145,19 @@ impl HookConfig {
                 perm_obj["defaultMode"] = serde_json::json!(mode);
             }
             settings["permissions"] = perm_obj;
+        }
+
+        // Workaround for Claude Code bug #16600: worktrees nested inside a parent
+        // project inherit the parent's CLAUDE.md and .claude/rules/ because Claude
+        // Code doesn't recognize .git files (worktree pointers) as project boundaries.
+        // Exclude the parent's context files so the child only loads its own.
+        if let Some(parent_dir) = parent_project_dir {
+            let parent = parent_dir.to_string_lossy();
+            settings["claudeMdExcludes"] = json!([
+                format!("{}/CLAUDE.md", parent),
+                format!("{}/CLAUDE.local.md", parent),
+                format!("{}/.claude/rules/**", parent),
+            ]);
         }
 
         let content =
