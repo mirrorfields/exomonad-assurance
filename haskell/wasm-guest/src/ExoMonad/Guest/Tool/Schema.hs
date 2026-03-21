@@ -97,6 +97,11 @@ genericToolSchemaWith descs =
         [ ("type", Aeson.String "string"),
           ("enum", toJSON vals)
         ]
+    SchemaConstructorName _ ->
+      KM.fromList
+        [ ("type", Aeson.String "object"),
+          ("properties", Aeson.Object KM.empty)
+        ]
     SchemaSimple val ->
       case val of
         Aeson.Object obj -> obj
@@ -107,6 +112,7 @@ data GSchemaResult
   = SchemaObject Value [Text]
   | SchemaEnum [Text]
   | SchemaSimple Value
+  | SchemaConstructorName Text
 
 -- | Generic implementation of JSON Schema derivation.
 class GJsonSchema f where
@@ -120,7 +126,7 @@ instance (GJsonSchema f) => GJsonSchema (D1 d f) where
 instance {-# OVERLAPPING #-} (Constructor c) => GJsonSchema (C1 c U1) where
   gToSchema _ _ =
     let name = conName (undefined :: C1 c U1 p)
-     in SchemaEnum [T.pack $ camelToSnake name]
+     in SchemaConstructorName (T.pack $ camelToSnake name)
 
 instance (GJsonSchema f) => GJsonSchema (C1 c f) where
   gToSchema _ descs = gToSchema (Proxy @f) descs
@@ -140,9 +146,10 @@ instance (GJsonSchema left, GJsonSchema right) => GJsonSchema (left :+: right) w
   gToSchema _ descs =
     let r1 = gToSchema (Proxy @left) descs
         r2 = gToSchema (Proxy @right) descs
-     in case (r1, r2) of
-          (SchemaEnum e1, SchemaEnum e2) -> SchemaEnum (e1 ++ e2)
-          _ -> r1 -- Should not happen for simple enums
+        toEnumList (SchemaEnum es) = es
+        toEnumList (SchemaConstructorName n) = [n]
+        toEnumList _ = []
+     in SchemaEnum (toEnumList r1 ++ toEnumList r2)
 
 -- Selector (field): extract schema
 instance (Selector s, JsonSchema a, IsOptional a) => GJsonSchema (S1 s (K1 i a)) where
