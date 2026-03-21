@@ -314,8 +314,14 @@ impl AgentControlService {
     ///
     /// Constructs the JSON configuration including MCP server connection and lifecycle hooks.
     /// Note: Gemini hooks must be PascalCase (e.g. AfterAgent).
-    /// Generate settings.json for a Gemini worker using stdio MCP transport.
-    pub(crate) fn generate_gemini_worker_settings(agent_name: &str, wasm_name: &str) -> serde_json::Value {
+    ///
+    /// `context_path` is an optional absolute path to the role context file.
+    /// Using an absolute path ensures workers spawned from worktrees can find the context.
+    pub(crate) fn generate_gemini_worker_settings(agent_name: &str, context_path: Option<&Path>) -> serde_json::Value {
+        let mut context_files = vec![serde_json::Value::String("GEMINI.md".to_string())];
+        if let Some(path) = context_path {
+            context_files.push(serde_json::Value::String(path.to_string_lossy().to_string()));
+        }
         serde_json::json!({
             "mcpServers": {
                 "exomonad": {
@@ -325,7 +331,7 @@ impl AgentControlService {
                 }
             },
             "context": {
-                "fileName": ["GEMINI.md", format!(".exo/roles/{}/context/worker.md", wasm_name)]
+                "fileName": context_files
             },
             "hooks": {
                 "BeforeTool": [
@@ -416,7 +422,8 @@ impl AgentControlService {
             // Workers don't have worktrees, so git-based resolution fails. This file is the fallback.
             let parent_bb = self.effective_birth_branch(Some(&ctx.birth_branch));
             fs::write(agent_config_dir.join(".birth_branch"), parent_bb.as_str()).await?;
-            let settings = Self::generate_gemini_worker_settings(&internal_name, &self.wasm_name);
+            let context_path = self.resolve_role_context("worker");
+            let settings = Self::generate_gemini_worker_settings(&internal_name, context_path.as_deref());
             fs::write(&settings_path, serde_json::to_string_pretty(&settings)?).await?;
             info!(
                 path = %settings_path.display(),
@@ -558,19 +565,34 @@ impl AgentControlService {
 
             let role = options.role.as_deref().unwrap_or("tl");
 
-            // Copy role context into Claude subtree's rules dir.
+            // Copy role context into worktree.
             // Must be a copy, not a symlink — symlinks escape the worktree boundary
             // and cause Claude Code to discover parent context files.
-            if agent_type == AgentType::Claude {
-                if let Some(context_src) = self.resolve_role_context(role) {
-                    let rules_dir = worktree_path.join(".claude/rules");
-                    let _ = fs::create_dir_all(&rules_dir).await;
-                    let dest = rules_dir.join("exomonad_role.md");
-                    let _ = fs::remove_file(&dest).await;
-                    match fs::copy(&context_src, &dest).await {
-                        Ok(_) => info!(role = %role, src = %context_src.display(), dest = %dest.display(), "Copied role context into worktree"),
-                        Err(e) => warn!(role = %role, error = %e, "Failed to copy role context (non-fatal)"),
+            if let Some(context_src) = self.resolve_role_context(role) {
+                match agent_type {
+                    AgentType::Claude => {
+                        // Claude: .claude/rules/exomonad_role.md (loaded as rules file)
+                        let rules_dir = worktree_path.join(".claude/rules");
+                        let _ = fs::create_dir_all(&rules_dir).await;
+                        let dest = rules_dir.join("exomonad_role.md");
+                        let _ = fs::remove_file(&dest).await;
+                        match fs::copy(&context_src, &dest).await {
+                            Ok(_) => info!(role = %role, src = %context_src.display(), dest = %dest.display(), "Copied role context into worktree"),
+                            Err(e) => warn!(role = %role, error = %e, "Failed to copy role context (non-fatal)"),
+                        }
                     }
+                    AgentType::Gemini => {
+                        // Gemini: .exo/roles/{wasm}/context/{role}.md (matched by context.fileName in settings)
+                        let dest_dir = worktree_path.join(format!(".exo/roles/{}/context", self.wasm_name));
+                        let _ = fs::create_dir_all(&dest_dir).await;
+                        let dest = dest_dir.join(format!("{}.md", role));
+                        let _ = fs::remove_file(&dest).await;
+                        match fs::copy(&context_src, &dest).await {
+                            Ok(_) => info!(role = %role, src = %context_src.display(), dest = %dest.display(), "Copied role context into Gemini worktree"),
+                            Err(e) => warn!(role = %role, error = %e, "Failed to copy Gemini role context (non-fatal)"),
+                        }
+                    }
+                    AgentType::Shoal => {} // Shoal agents use their own context mechanism
                 }
             }
 

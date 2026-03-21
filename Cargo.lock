@@ -1224,7 +1224,6 @@ dependencies = [
  "octocrab",
  "ollama-rs",
  "opentelemetry",
- "pathdiff",
  "proptest",
  "prost 0.14.3",
  "prost-types",

@@ -535,18 +535,8 @@ impl AgentControlService {
 
     /// Resolve role context file with two-tier fallback: project-local > global.
     pub(crate) fn resolve_role_context(&self, role: &str) -> Option<PathBuf> {
-        let local = self.project_dir.join(format!(".exo/roles/{}/context/{}.md", self.wasm_name, role));
-        tracing::info!(path = %local.display(), exists = local.exists(), role = %role, wasm_name = %self.wasm_name, "resolve_role_context: checking local");
-        if local.exists() { return Some(local); }
-        if let Ok(home) = std::env::var("HOME") {
-            let global = PathBuf::from(home).join(format!(".exo/roles/{}/context/{}.md", self.wasm_name, role));
-            tracing::info!(path = %global.display(), exists = global.exists(), "resolve_role_context: checking global");
-            if global.exists() { return Some(global); }
-        }
-        tracing::warn!(role = %role, wasm_name = %self.wasm_name, "resolve_role_context: no context file found");
-        None
+        resolve_role_context_path(&self.project_dir, &self.wasm_name, role)
     }
-
 
     /// Generate MCP configuration JSON for an agent using stdio transport.
     pub(crate) fn generate_mcp_config(name: &str, agent_type: AgentType, role: &str, wasm_name: &str) -> String {
@@ -760,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_gemini_worker_settings_schema_compliance() {
-        let settings = AgentControlService::generate_gemini_worker_settings("test-worker", "devswarm");
+        let settings = AgentControlService::generate_gemini_worker_settings("test-worker", None);
 
         // 1. MCP config uses stdio transport
         assert_eq!(settings["mcpServers"]["exomonad"]["type"], "stdio");

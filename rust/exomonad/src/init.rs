@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 /// Run the init command: create or attach to tmux session.
 pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()> {
     use exomonad_core::services::tmux_ipc::TmuxIpc;
-    use exomonad_core::services::AgentType;
+    use exomonad_core::services::{resolve_role_context_path, AgentType};
     use std::io::{IsTerminal, Write};
     let cwd = std::env::current_dir()?;
     let config_path = cwd.join(".exo/config.toml");
@@ -786,17 +786,3 @@ pub async fn wait_for_server_socket(project_dir: &Path) -> Result<()> {
     anyhow::bail!("Server socket exists but health check failed.")
 }
 
-/// Resolve role context file with two-tier fallback: project-local > global.
-fn resolve_role_context_path(project_dir: &Path, wasm_name: &str, role: &str) -> Option<PathBuf> {
-    let local = project_dir.join(format!(".exo/roles/{}/context/{}.md", wasm_name, role));
-    if local.exists() {
-        return Some(local);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let global = PathBuf::from(home).join(format!(".exo/roles/{}/context/{}.md", wasm_name, role));
-        if global.exists() {
-            return Some(global);
-        }
-    }
-    None
-}
