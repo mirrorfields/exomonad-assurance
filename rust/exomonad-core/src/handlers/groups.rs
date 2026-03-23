@@ -90,7 +90,9 @@ pub fn orchestration_handlers(
 ) -> Vec<Box<dyn EffectHandler>> {
     let mut agent_handler = AgentHandler::new(agent_control)
         .with_claude_session_registry(claude_session_registry.clone())
-        .with_acp_registry(acp_registry.clone());
+        .with_acp_registry(acp_registry.clone())
+        .with_supervisor_registry(supervisor_registry.clone())
+        .with_team_registry(team_registry.clone());
 
     let mut event_handler = EventHandler::new(event_queue, event_queue_scope, project_dir)
         .with_team_registry(team_registry.clone())
