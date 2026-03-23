@@ -434,3 +434,91 @@ fn resolve_from_config_real_cc_format() {
     // Non-existent member returns None
     assert!(TeamRegistry::resolve_from_config(team, "nonexistent").is_none());
 }
+
+/// Live test: resolve and deliver through the REAL Teams bus.
+///
+/// Uses the actual ~/.claude/teams/ directory — no HOME override.
+/// Resolves "supervisor" from the "address-type" team config via Tier 2,
+/// writes a message to its inbox, reads it back, and cleans up.
+///
+/// This test is #[ignore] because it requires the "address-type" team to exist
+/// on the host. Run explicitly: `cargo test -p claude-teams-bridge --test integration -- live_teams_bus --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn live_teams_bus_tier2_resolve_and_deliver() {
+    let team = "address-type";
+
+    // Verify the team exists on disk
+    let config_path = claude_teams_bridge::config_path(team);
+    assert!(
+        config_path
+            .as_ref()
+            .map(|p| p.exists())
+            .unwrap_or(false),
+        "Team '{}' config.json not found — this test requires a live team",
+        team
+    );
+
+    // Tier 2 resolve: find "supervisor" from config.json
+    let info = TeamRegistry::resolve_from_config(team, "supervisor");
+    assert!(
+        info.is_some(),
+        "Could not resolve 'supervisor' from {}/config.json — is the member present?",
+        team
+    );
+    let info = info.unwrap();
+    println!("[live] Tier 2 resolved 'supervisor': team={}, inbox={}", info.team_name, info.inbox_name);
+
+    // Full registry resolve: register sender in memory, resolve recipient via Tier 2
+    let registry = TeamRegistry::new();
+    registry
+        .register(
+            "live-test-sender",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "live-test-sender".into(),
+            },
+        )
+        .await;
+    let sender_team = registry
+        .get("live-test-sender")
+        .await
+        .map(|i| i.team_name);
+    let resolved = registry
+        .resolve("supervisor", sender_team.as_deref())
+        .await
+        .expect("resolve() should find supervisor via Tier 2");
+    assert_eq!(resolved.team_name, team);
+    println!("[live] registry.resolve() found supervisor via Tier 2");
+
+    // Write test message to supervisor inbox
+    let ts = write_to_inbox(
+        &resolved.team_name,
+        &resolved.inbox_name,
+        "live-resolve-test",
+        "[from: live-resolve-test] Two-tier resolve works! Message delivered via config.json Tier 2 lookup.",
+        "Live resolve test",
+    )
+    .unwrap();
+    println!("[live] Wrote to inbox at timestamp: {}", ts);
+
+    // Read it back and verify
+    let messages = read_inbox(team, "supervisor").unwrap();
+    let last = messages.last().expect("inbox should have at least one message");
+    assert_eq!(last.from, "live-resolve-test");
+    assert!(last.text.contains("Two-tier resolve works!"));
+    assert_eq!(last.timestamp, ts);
+    println!("[live] Read back from inbox: from={}, text={}", last.from, last.text);
+    println!("[live] E2E verified: config.json -> resolve -> write_to_inbox -> read_inbox");
+    println!("[live] Message is live at ~/.claude/teams/{}/inboxes/supervisor.json", team);
+
+    // Clean up: remove only our test message (leave other messages intact)
+    let inbox_file = claude_teams_bridge::inbox_path(team, "supervisor").unwrap();
+    if inbox_file.exists() {
+        let content = fs::read_to_string(&inbox_file).unwrap();
+        let mut msgs: Vec<TeamsMessage> = serde_json::from_str(&content).unwrap();
+        msgs.retain(|m| m.from != "live-resolve-test");
+        fs::write(&inbox_file, serde_json::to_string_pretty(&msgs).unwrap()).unwrap();
+        println!("[live] Cleaned up test message from inbox");
+    }
+}
