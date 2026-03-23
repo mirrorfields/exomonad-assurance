@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use exomonad::config::Config;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -911,6 +912,12 @@ Run `exomonad recompile` first to build it.",
     poller = poller.with_team_registry(team_registry);
     poller = poller.with_acp_registry(acp_registry.clone());
     poller = poller.with_plugins(plugins.clone());
+    if let Some(interval) = config.poll_interval {
+        if interval == 0 {
+            anyhow::bail!("Invalid configuration: `poll_interval` must be >= 1 second, got 0");
+        }
+        poller = poller.with_poll_interval(Duration::from_secs(interval));
+    }
     if let Some(ref log) = event_log {
         poller = poller.with_event_log(log.clone());
     }

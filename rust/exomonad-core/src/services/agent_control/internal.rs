@@ -196,7 +196,7 @@ impl AgentControlService {
                     String::new()
                 }
             }
-            AgentType::Shoal => String::new(),
+            AgentType::Shoal | AgentType::Process => String::new(),
         };
 
         let agent_command = match (prompt_file, fork_session_id) {
@@ -483,6 +483,7 @@ impl AgentControlService {
                 fs::write(gemini_dir.join("settings.json"), mcp_content).await?;
                 info!(agent_dir = %agent_dir.display(), role = %role, "Wrote .gemini/settings.json for Gemini agent");
             }
+            AgentType::Process => {} // No MCP config for process companions
             AgentType::Shoal => {
                 let exo_dir = agent_dir.join(".exo");
                 fs::create_dir_all(&exo_dir).await?;
@@ -491,6 +492,54 @@ impl AgentControlService {
             }
         }
         Ok(())
+    }
+
+    /// Pre-trust a directory for Gemini CLI by adding it to `~/.gemini/trustedFolders.json`.
+    ///
+    /// This prevents the interactive "Trust this folder?" dialog that blocks Gemini agents.
+    pub(crate) async fn gemini_trust_folder(path: &Path) {
+        let Some(home) = dirs::home_dir() else {
+            warn!("Could not determine home directory for Gemini trust");
+            return;
+        };
+        let gemini_home = home.join(".gemini");
+        if let Err(e) = tokio::fs::create_dir_all(&gemini_home).await {
+            warn!(error = %e, dir = %gemini_home.display(), "Failed to create Gemini config directory");
+            return;
+        }
+        let trust_file = gemini_home.join("trustedFolders.json");
+        let abs_path = match path.canonicalize() {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => path.to_string_lossy().to_string(),
+        };
+
+        let mut trust_map: serde_json::Map<String, serde_json::Value> = if trust_file.exists() {
+            match tokio::fs::read_to_string(&trust_file).await {
+                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                Err(_) => serde_json::Map::new(),
+            }
+        } else {
+            serde_json::Map::new()
+        };
+
+        if trust_map.contains_key(&abs_path) {
+            return;
+        }
+
+        trust_map.insert(abs_path.clone(), serde_json::Value::String("TRUST_FOLDER".to_string()));
+
+        if let Ok(content) = serde_json::to_string_pretty(&trust_map) {
+            // Atomic write: temp file + rename to avoid partial writes from concurrent spawns
+            let tmp_file = trust_file.with_extension("tmp");
+            if let Err(e) = tokio::fs::write(&tmp_file, &content).await {
+                warn!(path = %abs_path, error = %e, "Failed to write Gemini trustedFolders.json tmp");
+            } else if let Err(e) = tokio::fs::rename(&tmp_file, &trust_file).await {
+                warn!(path = %abs_path, error = %e, "Failed to rename Gemini trustedFolders.json");
+                let _ = tokio::fs::remove_file(&tmp_file).await;
+            } else {
+                info!(path = %abs_path, "Pre-trusted folder for Gemini CLI");
+            }
+        }
     }
 
     /// Symlink server socket into worktree so agents find it without walk-up.
@@ -594,6 +643,7 @@ impl AgentControlService {
                 "args": ["mcp-stdio", "--role", role, "--name", name]
             }))
             .unwrap(),
+            AgentType::Process => String::new(),
         }
     }
 

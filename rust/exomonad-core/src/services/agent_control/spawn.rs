@@ -72,6 +72,7 @@ impl AgentControlService {
                 AgentType::Claude => "tl",
                 AgentType::Gemini => "dev",
                 AgentType::Shoal => "shoal",
+                AgentType::Process => unreachable!("Process agents are not spawned via effects"),
             };
             self.write_agent_mcp_config(
                 &effective_project_dir,
@@ -264,13 +265,14 @@ impl AgentControlService {
             )
             .await?;
 
-            // For Gemini agents, point at worktree settings via env var
+            // For Gemini agents, point at worktree settings via env var and pre-trust folder
             if options.agent_type == AgentType::Gemini {
                 let settings_path = worktree_path.join(".gemini").join("settings.json");
                 env_vars.insert(
                     "GEMINI_CLI_SYSTEM_SETTINGS_PATH".to_string(),
                     settings_path.to_string_lossy().to_string(),
                 );
+                Self::gemini_trust_folder(&worktree_path).await;
             }
 
             let window_id = self
@@ -436,6 +438,10 @@ impl AgentControlService {
                 settings_path.to_string_lossy().to_string(),
             );
 
+            // Pre-trust the caller's worktree for Gemini
+            let caller_worktree_for_trust = self.project_dir.join(&ctx.working_dir);
+            Self::gemini_trust_folder(&caller_worktree_for_trust).await;
+
             // Resolve caller's context (tab and worktree) from its context.
             let caller_tab = resolve_own_tab_name(ctx);
             let caller_worktree = ctx.working_dir.clone();
@@ -592,7 +598,7 @@ impl AgentControlService {
                             Err(e) => warn!(role = %role, error = %e, "Failed to copy Gemini role context (non-fatal)"),
                         }
                     }
-                    AgentType::Shoal => {} // Shoal agents use their own context mechanism
+                    AgentType::Shoal | AgentType::Process => {}
                 }
             }
 
@@ -772,12 +778,13 @@ impl AgentControlService {
             self.write_agent_mcp_config(effective_project_dir, &worktree_path, agent_type, role)
                 .await?;
 
-            // Set GEMINI_CLI_SYSTEM_SETTINGS_PATH
+            // Set GEMINI_CLI_SYSTEM_SETTINGS_PATH and pre-trust folder
             let settings_path = worktree_path.join(".gemini").join("settings.json");
             env_vars.insert(
                 "GEMINI_CLI_SYSTEM_SETTINGS_PATH".to_string(),
                 settings_path.to_string_lossy().to_string(),
             );
+            Self::gemini_trust_folder(&worktree_path).await;
 
             let mut task = options.task.clone();
             if options.standalone_repo && !options.allowed_dirs.is_empty() {

@@ -410,6 +410,15 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
     if !rename_status.success() {
         warn!("tmux rename-window failed with status {}", rename_status);
     }
+    // Set env vars via tmux set-environment so they're inherited cleanly
+    // (avoids inlining secrets in send-keys command strings / terminal scrollback)
+    for var in ["GITHUB_TOKEN", "GITHUB_API_URL"] {
+        if let Ok(val) = std::env::var(var) {
+            let _ = std::process::Command::new("tmux")
+                .args(["set-environment", "-t", &session, var, &val])
+                .status();
+        }
+    }
     let serve_cmd = format!("EXOMONAD_TMUX_SESSION={} exomonad serve", &session);
     let send_status = std::process::Command::new("tmux")
         .args([
@@ -432,12 +441,16 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
     let base_command = if let Some(ref cmd) = config.root_command {
         cmd.clone()
     } else {
+        let model_flag = config.model.as_ref()
+            .map(|m| format!(" --model {}", m))
+            .unwrap_or_default();
         match (config.root_agent_type, config.initial_prompt.as_deref()) {
-            (AgentType::Claude, _) => "claude --dangerously-skip-permissions -c || claude --dangerously-skip-permissions; echo; echo [Claude Code exited]; exec bash -l".to_string(),
-            (AgentType::Gemini, Some(prompt)) => format!("gemini --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
-            (AgentType::Gemini, None) => "gemini".to_string(),
+            (AgentType::Claude, _) => format!("claude --dangerously-skip-permissions{model_flag} -c || claude --dangerously-skip-permissions{model_flag}; echo; echo [Claude Code exited]; exec bash -l"),
+            (AgentType::Gemini, Some(prompt)) => format!("gemini{model_flag} --prompt-interactive '{}'", prompt.replace('\'', "'\\''")),
+            (AgentType::Gemini, None) => format!("gemini{model_flag}"),
             (AgentType::Shoal, Some(prompt)) => format!("shoal-agent --exo root --prompt '{}'", prompt.replace('\'', "'\\''")),
             (AgentType::Shoal, None) => "shoal-agent --exo root".to_string(),
+            (AgentType::Process, _) => unreachable!("Process is for companions only, not root agent"),
         }
     };
 
@@ -477,6 +490,17 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                 AgentType::Claude
             }
         };
+
+        // Process companions: plain command in a tmux window, no agent infrastructure
+        if agent_type == AgentType::Process {
+            info!(name = %companion.name, agent_type = ?agent_type, "Spawning companion process");
+            let companion_cmd = &companion.command;
+            let window_id = ipc
+                .new_window(&companion.name, &cwd, &shell, companion_cmd)
+                .await?;
+            info!(name = %companion.name, window = %window_id.as_str(), "Companion process spawned");
+            continue;
+        }
 
         info!(name = %companion.name, role = %companion.role, agent_type = ?agent_type, "Spawning companion agent");
 
@@ -664,17 +688,25 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                     )?;
                 }
                 AgentType::Shoal => {}
-                AgentType::Claude => unreachable!(),
+                AgentType::Claude | AgentType::Process => unreachable!(),
             }
 
             cwd.clone()
         };
 
-        // Build command per agent type
+        // Build command per agent type.
+        // Prefix with identity env vars so hook CLI resolves the correct agent.
         let escaped_task = companion
             .task
             .as_deref()
             .map(|t| t.replace('\'', "'\\''"));
+        let model_flag = companion.model.as_ref()
+            .map(|m| format!(" --model {}", m))
+            .unwrap_or_default();
+        let env_prefix = format!(
+            "EXOMONAD_AGENT_ID={} EXOMONAD_ROLE={} ",
+            companion.name, companion.role
+        );
         let companion_cmd = match agent_type {
             AgentType::Claude => {
                 // Pure CWD discovery — no --mcp-config, no --strict-mcp-config
@@ -683,7 +715,7 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                     None => String::new(),
                 };
                 format!(
-                    "{}{task_part}; echo; echo '[{} exited]'; exec bash -l",
+                    "{env_prefix}{}{model_flag}{task_part}; echo; echo '[{} exited]'; exec bash -l",
                     companion.command, companion.name
                 )
             }
@@ -694,7 +726,7 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                     None => String::new(),
                 };
                 format!(
-                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH={} {}{}",
+                    "{env_prefix}GEMINI_CLI_SYSTEM_SETTINGS_PATH={} {}{model_flag}{}",
                     settings.display(),
                     companion.command,
                     task_part
@@ -705,8 +737,9 @@ pub async fn run(session_override: Option<String>, recreate: bool) -> Result<()>
                     Some(t) => format!(" '{}'", t),
                     None => String::new(),
                 };
-                format!("{}{}", companion.command, task_part)
+                format!("{env_prefix}{}{}", companion.command, task_part)
             }
+            AgentType::Process => unreachable!("Process companions handled above"),
         };
         let window_id = ipc
             .new_window(&companion.name, &companion_cwd, &shell, &companion_cmd)

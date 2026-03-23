@@ -302,6 +302,11 @@ impl GitHubPoller {
         self
     }
 
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
     pub fn with_plugins(mut self, plugins: PluginMap) -> Self {
         self.plugins = Some(plugins);
         self
@@ -347,6 +352,7 @@ impl GitHubPoller {
             AgentType::Claude => "tl",
             AgentType::Gemini => "dev",
             AgentType::Shoal => "dev",
+            AgentType::Process => return Ok(None), // Process companions don't have WASM handlers
         };
 
         tracing::Span::current().record("role", role);
