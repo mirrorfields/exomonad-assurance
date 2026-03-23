@@ -497,7 +497,7 @@ impl AgentControlService {
     /// Pre-trust a directory for Gemini CLI by adding it to `~/.gemini/trustedFolders.json`.
     ///
     /// This prevents the interactive "Trust this folder?" dialog that blocks Gemini agents.
-    pub(crate) async fn gemini_trust_folder(path: &Path) {
+    pub async fn gemini_trust_folder(path: &Path) {
         let Some(home) = dirs::home_dir() else {
             warn!("Could not determine home directory for Gemini trust");
             return;
@@ -620,6 +620,28 @@ impl AgentControlService {
                                 {
                                     "type": "command",
                                     "command": "exomonad hook before-tool --runtime gemini"
+                                }
+                            ]
+                        }
+                    ],
+                    "BeforeModel": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "exomonad hook before-model --runtime gemini"
+                                }
+                            ]
+                        }
+                    ],
+                    "AfterModel": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "exomonad hook after-model --runtime gemini"
                                 }
                             ]
                         }
@@ -790,6 +812,22 @@ mod tests {
             "exomonad hook before-tool --runtime gemini"
         );
 
+        let before_model = &parsed["hooks"]["BeforeModel"];
+        assert!(before_model.is_array());
+        let bm_hooks = &before_model[0]["hooks"];
+        assert_eq!(
+            bm_hooks[0]["command"],
+            "exomonad hook before-model --runtime gemini"
+        );
+
+        let after_model = &parsed["hooks"]["AfterModel"];
+        assert!(after_model.is_array());
+        let am_hooks = &after_model[0]["hooks"];
+        assert_eq!(
+            am_hooks[0]["command"],
+            "exomonad hook after-model --runtime gemini"
+        );
+
         let after_agent = &parsed["hooks"]["AfterAgent"];
         assert!(after_agent.is_array());
         let hooks_list = &after_agent[0]["hooks"];
@@ -822,6 +860,14 @@ mod tests {
         assert!(
             settings["hooks"].get("BeforeTool").is_some(),
             "hooks.BeforeTool is missing"
+        );
+        assert!(
+            settings["hooks"].get("BeforeModel").is_some(),
+            "hooks.BeforeModel is missing"
+        );
+        assert!(
+            settings["hooks"].get("AfterModel").is_some(),
+            "hooks.AfterModel is missing"
         );
         assert!(
             settings["hooks"].get("after-agent").is_none(),

@@ -100,6 +100,14 @@ pub struct HookInput {
     /// Ref: <https://geminicli.com/docs/hooks/reference/#afteragent>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+
+    /// LLM request payload (BeforeModel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_request: Option<Value>,
+
+    /// LLM response chunk (AfterModel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_response: Option<Value>,
 }
 
 // ============================================================================
@@ -439,6 +447,52 @@ pub struct HookEnvelope {
     pub exit_code: i32,
 }
 
+// ============================================================================
+// Gemini-Specific Hook Domain Types (from WASM, serialized directly)
+// ============================================================================
+
+/// Internal BeforeModel hook output from WASM.
+/// Same pattern: Haskell ToJSON produces Gemini-compatible format.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InternalBeforeModelOutput {
+    /// Whether to continue.
+    #[serde(rename = "continue", default = "default_true")]
+    pub continue_: bool,
+
+    /// Decision: "deny" to block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+
+    /// Reason for denying.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+
+    /// Hook-specific output (e.g., llm_request or llm_response).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "hookSpecificOutput")]
+    pub hook_specific_output: Option<Value>,
+}
+
+/// Internal AfterModel hook output from WASM.
+/// Same pattern: Haskell ToJSON produces Gemini-compatible format.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InternalAfterModelOutput {
+    /// Whether to continue.
+    #[serde(rename = "continue", default = "default_true")]
+    pub continue_: bool,
+
+    /// Decision: "deny" to discard chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+
+    /// Reason for denying.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+
+    /// Hook-specific output (e.g., rewritten llm_response).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "hookSpecificOutput")]
+    pub hook_specific_output: Option<Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,6 +758,8 @@ mod proptest_tests {
                         reason: None,
                         prompt_response: None,
                         timestamp: None,
+                        llm_request: None,
+                        llm_response: None,
                     }
                 },
             )

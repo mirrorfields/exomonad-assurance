@@ -30,7 +30,7 @@ import ExoMonad.Effects.KV (KVCleanupStalePhases, CleanupStalePhasesRequest (..)
 import ExoMonad.Effects.Session qualified as Session
 import ExoMonad.Guest.Tool.SuspendEffect (suspendEffect, suspendEffect_)
 import ExoMonad.Guest.Events (EventHandlerConfig, defaultEventHandlers)
-import ExoMonad.Guest.Types (HookInput (..), HookOutput (..), HookSpecificOutput (..), StopHookOutput, Effects, allowResponse, allowStopResponse, postToolUseResponse)
+import ExoMonad.Guest.Types (HookInput (..), HookOutput (..), HookSpecificOutput (..), StopHookOutput, BeforeModelOutput (..), AfterModelOutput (..), Effects, allowResponse, allowStopResponse, postToolUseResponse)
 import GHC.Generics (Generic)
 
 -- | Role configuration.
@@ -54,7 +54,11 @@ data HookConfig = HookConfig
     -- | Called when a sub-agent stops.
     onSubagentStop :: HookInput -> Eff Effects StopHookOutput,
     -- | Called on session start. Default: registers Claude session ID for fork-session.
-    onSessionStart :: HookInput -> Eff Effects HookOutput
+    onSessionStart :: HookInput -> Eff Effects HookOutput,
+    -- | Gemini BeforeModel hook. Can bypass the LLM with a synthetic response.
+    beforeModel :: HookInput -> Eff Effects BeforeModelOutput,
+    -- | Gemini AfterModel hook. Fires per LLM response chunk, enables rewriting.
+    afterModel :: HookInput -> Eff Effects AfterModelOutput
   }
 
 -- | Default hooks that allow everything.
@@ -65,7 +69,9 @@ defaultHooks =
       postToolUse = \_ -> pure (postToolUseResponse Nothing),
       onStop = \_ -> pure allowStopResponse,
       onSubagentStop = \_ -> pure allowStopResponse,
-      onSessionStart = defaultSessionStartHook
+      onSessionStart = defaultSessionStartHook,
+      beforeModel = \_ -> pure (BeforeModelAllow Nothing),
+      afterModel = \_ -> pure (AfterModelAllow Nothing)
     }
 
 -- | Extract the conversation UUID from the transcript path.

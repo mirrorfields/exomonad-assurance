@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 // Re-export commonly used types
 pub use hook::{
     ClaudePreToolUseOutput, ClaudeStopHookOutput, GeminiStopDecision, GeminiStopHookOutput,
-    HookEnvelope, HookInput, HookSpecificOutput, InternalStopHookOutput, PermissionDecision,
-    StopDecision,
+    HookEnvelope, HookInput, HookSpecificOutput, InternalAfterModelOutput,
+    InternalBeforeModelOutput, InternalStopHookOutput, PermissionDecision, StopDecision,
 };
 pub use mcp::{McpError, ToolDefinition};
 pub use service::{
@@ -84,6 +84,10 @@ pub enum HookEventType {
     AfterAgent,
     /// Gemini: Before tool execution (equivalent to Claude's PreToolUse)
     BeforeTool,
+    /// Gemini: Before model invocation (can inject synthetic response)
+    BeforeModel,
+    /// Gemini: After model response chunk (can rewrite or discard)
+    AfterModel,
     /// Custom: Worker agent exit (sends completion note to parent)
     WorkerExit,
 }
@@ -176,6 +180,8 @@ mod proptest_tests {
             Just(HookEventType::UserPromptSubmit),
             Just(HookEventType::AfterAgent),
             Just(HookEventType::BeforeTool),
+            Just(HookEventType::BeforeModel),
+            Just(HookEventType::AfterModel),
             Just(HookEventType::WorkerExit),
         ]) {
             let json = serde_json::to_string(&val).unwrap();

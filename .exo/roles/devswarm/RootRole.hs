@@ -19,7 +19,7 @@ import ExoMonad.Guest.Tools.Spawn
     spawnWorkerToolCore, spawnWorkerToolDescription, spawnWorkerToolSchema, SpawnWorkerToolArgs
   )
 import ExoMonad.Guest.Effects.AgentControl (SpawnResult (..))
-import ExoMonad.Guest.Types (allowResponse, allowStopResponse)
+import ExoMonad.Guest.Types (allowResponse, allowStopResponse, BeforeModelOutput (..), AfterModelOutput (..))
 import ExoMonad.Types (HookConfig (..), defaultSessionStartHook, teamRegistrationPostToolUse)
 import PRReviewHandler (prReviewEventHandlers)
 import TLPhase (TLPhase (..), TLEvent (..), ChildHandle (..))
@@ -109,7 +109,9 @@ config =
           postToolUse      = teamRegistrationPostToolUse,
           onStop           = \_ -> pure allowStopResponse,
           onSubagentStop   = \_ -> pure allowStopResponse,
-          onSessionStart   = defaultSessionStartHook
+          onSessionStart   = defaultSessionStartHook,
+          beforeModel      = \_ -> pure (BeforeModelAllow Nothing),
+          afterModel       = \_ -> pure (AfterModelAllow Nothing)
         },
       eventHandlers = prReviewEventHandlers
     }

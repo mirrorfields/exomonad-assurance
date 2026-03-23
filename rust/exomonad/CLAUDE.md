@@ -175,10 +175,16 @@ cargo test -p exomonad
 # MCP integration tests (wrapper script manages server lifecycle)
 just test-mcp
 
-# E2E hook test (requires running server: exomonad serve)
+# E2E tests (interactive — launches tmux, you observe companions work)
+just e2e-messaging         # Teams inbox delivery pipeline
+just e2e-hook-rewrite      # BeforeModel/AfterModel PII rewriting
+
+# Quick hook smoke test (requires running server: exomonad serve)
 echo '{"session_id":"test","hook_event_name":"PreToolUse","tool_name":"Write","transcript_path":"/tmp/t.jsonl","cwd":"/","permission_mode":"default"}' | \
   ./target/debug/exomonad hook pre-tool-use
 ```
+
+E2E tests live in `tests/e2e/{name}/` and follow a standard pattern: `run.sh` creates a temp repo, configures companions (test subject + Claude testrunner), and runs `exomonad init` as the last line. See root `CLAUDE.md` § "E2E Test Pattern" for the full convention.
 
 ## Server Routes
 

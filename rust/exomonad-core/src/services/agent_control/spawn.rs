@@ -347,6 +347,28 @@ impl AgentControlService {
                         ]
                     }
                 ],
+                "BeforeModel": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "exomonad hook before-model --runtime gemini"
+                            }
+                        ]
+                    }
+                ],
+                "AfterModel": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "exomonad hook after-model --runtime gemini"
+                            }
+                        ]
+                    }
+                ],
                 "AfterAgent": [
                     {
                         "matcher": "*",

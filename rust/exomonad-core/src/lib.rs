@@ -103,7 +103,8 @@ pub use logging::{init_logging, init_logging_with_default};
 #[cfg(feature = "runtime")]
 pub use protocol::{
     ClaudePreToolUseOutput, ClaudeStopHookOutput, GeminiStopHookOutput, HookEnvelope,
-    HookEventType, HookInput, HookSpecificOutput, InternalStopHookOutput, PermissionDecision,
+    HookEventType, HookInput, HookSpecificOutput, InternalAfterModelOutput,
+    InternalBeforeModelOutput, InternalStopHookOutput, PermissionDecision,
     Runtime as ProtocolRuntime, StopDecision,
 };
 #[cfg(feature = "runtime")]

@@ -18,7 +18,7 @@ import ExoMonad.Guest.Tools.Tasks
     taskGetCore, taskGetDescription, taskGetSchema, TaskGetArgs,
     taskUpdateCore, taskUpdateDescription, taskUpdateSchema, TaskUpdateArgs
   )
-import ExoMonad.Guest.Types (allowResponse, allowStopResponse, postToolUseResponse)
+import ExoMonad.Guest.Types (allowResponse, allowStopResponse, postToolUseResponse, BeforeModelOutput (..), AfterModelOutput (..))
 import ExoMonad.Types (HookConfig (..), defaultSessionStartHook)
 
 -- | Worker notify_parent: thin wrapper, no phase transitions.
@@ -113,7 +113,9 @@ config =
             postToolUse = \_ -> pure (postToolUseResponse Nothing),
             onStop = \_ -> pure allowStopResponse,
             onSubagentStop = \_ -> pure allowStopResponse,
-            onSessionStart = defaultSessionStartHook
+            onSessionStart = defaultSessionStartHook,
+            beforeModel = \_ -> pure (BeforeModelAllow Nothing),
+            afterModel = \_ -> pure (AfterModelAllow Nothing)
           },
       eventHandlers = defaultEventHandlers
     }

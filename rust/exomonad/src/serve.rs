@@ -16,7 +16,8 @@ use exomonad_core::protocol::Runtime as HookRuntime;
 use exomonad_core::services::{git, tmux_events};
 use exomonad_core::{
     AgentName, BirthBranch, ClaudePreToolUseOutput, HookEnvelope, HookEventType, HookInput,
-    InternalStopHookOutput, PluginManager, Role, RuntimeBuilder, StopDecision,
+    InternalAfterModelOutput, InternalBeforeModelOutput, InternalStopHookOutput, PluginManager,
+    Role, RuntimeBuilder, StopDecision,
 };
 use std::collections::HashMap;
 use std::path::{Path as StdPath, PathBuf};
@@ -323,13 +324,19 @@ pub async fn handle_hook_inner(
         ToolUse,
         /// Worker exit: WASM handles notifyParent as side effect, returns simple allow
         WorkerExit,
+        /// Gemini BeforeModel/AfterModel: passed through to WASM, response serialized as-is
+        GeminiBeforeModel,
+        GeminiAfterModel,
     }
 
     let dispatch = match event_type {
         HookEventType::Stop | HookEventType::AfterAgent => HookDispatch::Stop,
         HookEventType::SubagentStop => HookDispatch::Stop,
         HookEventType::SessionEnd => HookDispatch::Stop,
-        HookEventType::PreToolUse | HookEventType::BeforeTool => HookDispatch::ToolUse,
+        HookEventType::PreToolUse => HookDispatch::ToolUse,
+        HookEventType::BeforeTool => HookDispatch::ToolUse,
+        HookEventType::BeforeModel => HookDispatch::GeminiBeforeModel,
+        HookEventType::AfterModel => HookDispatch::GeminiAfterModel,
         HookEventType::PostToolUse => HookDispatch::ToolUse,
         HookEventType::WorkerExit => HookDispatch::WorkerExit,
         HookEventType::SessionStart => HookDispatch::ToolUse,
@@ -354,7 +361,10 @@ pub async fn handle_hook_inner(
         HookEventType::Stop | HookEventType::AfterAgent => "Stop",
         HookEventType::SubagentStop => "SubagentStop",
         HookEventType::SessionEnd => "SessionEnd",
-        HookEventType::PreToolUse | HookEventType::BeforeTool => "PreToolUse",
+        HookEventType::PreToolUse => "PreToolUse",
+        HookEventType::BeforeTool => "PreToolUse",
+        HookEventType::BeforeModel => "BeforeModel",
+        HookEventType::AfterModel => "AfterModel",
         HookEventType::PostToolUse => "PostToolUse",
         HookEventType::WorkerExit => "WorkerExit",
         HookEventType::SessionStart => "SessionStart",
@@ -481,6 +491,40 @@ pub async fn handle_hook_inner(
             Ok(HookEnvelope {
                 stdout: output_json,
                 exit_code: 0,
+            })
+        }
+
+        HookDispatch::GeminiBeforeModel => {
+            let output: InternalBeforeModelOutput = plugin
+                .call("handle_pre_tool_use", &hook_input_value)
+                .await
+                .context("WASM handle_pre_tool_use (BeforeModel) failed")?;
+
+            let output_json =
+                serde_json::to_string(&output).context("Failed to serialize BeforeModel output")?;
+
+            let exit_code = if output.continue_ { 0 } else { 2 };
+
+            Ok(HookEnvelope {
+                stdout: output_json,
+                exit_code,
+            })
+        }
+
+        HookDispatch::GeminiAfterModel => {
+            let output: InternalAfterModelOutput = plugin
+                .call("handle_pre_tool_use", &hook_input_value)
+                .await
+                .context("WASM handle_pre_tool_use (AfterModel) failed")?;
+
+            let output_json =
+                serde_json::to_string(&output).context("Failed to serialize AfterModel output")?;
+
+            let exit_code = if output.continue_ { 0 } else { 2 };
+
+            Ok(HookEnvelope {
+                stdout: output_json,
+                exit_code,
             })
         }
 

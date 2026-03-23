@@ -199,6 +199,16 @@ dispatchHook cfg hookInput =
       result <- handleWorkerExit hookInput
       output (BSL.toStrict $ Aeson.encode result)
       pure 0
+    BeforeModel -> do
+      status <- runM $ runC $ runFileSystemSuspend $ runAgentControlSuspend (beforeModel cfg hookInput)
+      result <- statusToWasmResult status
+      output (BSL.toStrict $ Aeson.encode result)
+      pure 0
+    AfterModel -> do
+      status <- runM $ runC $ runFileSystemSuspend $ runAgentControlSuspend (afterModel cfg hookInput)
+      result <- statusToWasmResult status
+      output (BSL.toStrict $ Aeson.encode result)
+      pure 0
   where
     runStopHook hook = do
       status <- runM $ runC $ runFileSystemSuspend $ runAgentControlSuspend (hook hookInput)

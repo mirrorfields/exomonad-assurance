@@ -18,7 +18,7 @@ import ExoMonad.Guest.Tools.TestRunner
   ( instructCore, instructDescription, instructSchema, InstructArgs
   , postReviewCore, postReviewDescription, postReviewSchema, PostReviewArgs
   )
-import ExoMonad.Guest.Types (allowResponse, allowStopResponse, postToolUseResponse)
+import ExoMonad.Guest.Types (allowResponse, allowStopResponse, postToolUseResponse, BeforeModelOutput (..), AfterModelOutput (..))
 import ExoMonad.Types (HookConfig (..), defaultSessionStartHook)
 
 -- | Instruct tool: sends a message to the root agent under test.
@@ -86,7 +86,9 @@ config =
             postToolUse = \_ -> pure (postToolUseResponse Nothing),
             onStop = \_ -> pure allowStopResponse,
             onSubagentStop = \_ -> pure allowStopResponse,
-            onSessionStart = defaultSessionStartHook
+            onSessionStart = defaultSessionStartHook,
+            beforeModel = \_ -> pure (BeforeModelAllow Nothing),
+            afterModel = \_ -> pure (AfterModelAllow Nothing)
           },
       eventHandlers = defaultEventHandlers
     }

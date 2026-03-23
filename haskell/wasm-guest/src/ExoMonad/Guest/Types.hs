@@ -22,6 +22,17 @@ module ExoMonad.Guest.Types
     postToolUseResponse,
     allowStopResponse,
     blockStopResponse,
+
+    -- * Gemini-specific hook types
+    BeforeModelOutput (..),
+    AfterModelOutput (..),
+    allowBeforeModel,
+    denyBeforeModel,
+    syntheticBeforeModel,
+    allowAfterModel,
+    denyAfterModel,
+    haltAfterModel,
+    rewriteAfterModel,
   )
 where
 
@@ -60,7 +71,7 @@ instance FromJSON MCPCallInput where
 
 -- | Hook event type (internal abstractions only).
 -- Rust normalizes CLI-specific types (Claude Stop, Gemini AfterAgent) to these.
-data HookEventType = SessionStart | SessionEnd | Stop | SubagentStop | PreToolUse | PostToolUse | WorkerExit
+data HookEventType = SessionStart | SessionEnd | Stop | SubagentStop | PreToolUse | PostToolUse | WorkerExit | BeforeModel | AfterModel
   deriving (Show, Eq, Generic)
 
 instance ToJSON HookEventType where
@@ -71,6 +82,8 @@ instance ToJSON HookEventType where
   toJSON PreToolUse = Aeson.String "PreToolUse"
   toJSON PostToolUse = Aeson.String "PostToolUse"
   toJSON WorkerExit = Aeson.String "WorkerExit"
+  toJSON BeforeModel = Aeson.String "BeforeModel"
+  toJSON AfterModel = Aeson.String "AfterModel"
 
 instance FromJSON HookEventType where
   parseJSON = Aeson.withText "HookEventType" $ \case
@@ -81,6 +94,8 @@ instance FromJSON HookEventType where
     "PreToolUse" -> pure PreToolUse
     "PostToolUse" -> pure PostToolUse
     "WorkerExit" -> pure WorkerExit
+    "BeforeModel" -> pure BeforeModel
+    "AfterModel" -> pure AfterModel
     other -> fail $ "Unknown hook event type: " <> T.unpack other
 
 -- | Runtime environment (Claude or Gemini).
@@ -116,7 +131,11 @@ data HookInput = HookInput
     hiCwd :: Maybe Text,
     -- | Absolute path to the active .jsonl transcript file.
     -- The basename (minus .jsonl) is the true conversation UUID for --resume --fork-session.
-    hiTranscriptPath :: Maybe Text
+    hiTranscriptPath :: Maybe Text,
+    -- | LLM request payload (BeforeModel hook).
+    hiLlmRequest :: Maybe Value,
+    -- | LLM response chunk (AfterModel hook).
+    hiLlmResponse :: Maybe Value
   }
   deriving (Show, Generic)
 
@@ -138,6 +157,8 @@ instance FromJSON HookInput where
       <*> v .:? "runtime"
       <*> v .:? "cwd"
       <*> v .:? "transcript_path"
+      <*> v .:? "llm_request"
+      <*> v .:? "llm_response"
 
 -- | Output from a hook handler.
 data HookOutput = HookOutput
@@ -293,3 +314,88 @@ blockStopResponse msg =
     { decision = Block,
       reason = Just msg
     }
+
+-- ============================================================================
+-- Gemini-Specific Hook Types
+-- ============================================================================
+
+-- | BeforeModel hook response (Gemini-specific).
+-- Can bypass the LLM call entirely with a synthetic response.
+data BeforeModelOutput
+  = BeforeModelAllow (Maybe Value)  -- ^ Allow with optional modified llm_request
+  | BeforeModelDeny Text            -- ^ Block the request
+  | BeforeModelSynthetic Value      -- ^ Bypass LLM, inject synthetic llm_response
+  deriving (Show, Generic)
+
+instance ToJSON BeforeModelOutput where
+  toJSON (BeforeModelAllow Nothing) =
+    object ["continue" .= True]
+  toJSON (BeforeModelAllow (Just llmRequest)) =
+    object
+      [ "continue" .= True,
+        "hookSpecificOutput" .= object ["llm_request" .= llmRequest]
+      ]
+  toJSON (BeforeModelDeny reason) =
+    object
+      [ "decision" .= ("deny" :: Text),
+        "reason" .= reason,
+        "continue" .= True
+      ]
+  toJSON (BeforeModelSynthetic response) =
+    object
+      [ "continue" .= True,
+        "hookSpecificOutput" .= object ["llm_response" .= response]
+      ]
+
+-- | Allow with no modifications (BeforeModel).
+allowBeforeModel :: BeforeModelOutput
+allowBeforeModel = BeforeModelAllow Nothing
+
+-- | Deny with reason (BeforeModel).
+denyBeforeModel :: Text -> BeforeModelOutput
+denyBeforeModel = BeforeModelDeny
+
+-- | Bypass LLM with synthetic response (BeforeModel).
+syntheticBeforeModel :: Value -> BeforeModelOutput
+syntheticBeforeModel = BeforeModelSynthetic
+
+-- | AfterModel hook response (Gemini-specific).
+-- Fires per LLM response chunk. Can rewrite, discard, or halt.
+data AfterModelOutput
+  = AfterModelAllow (Maybe Value)   -- ^ Allow with optional rewritten llm_response chunk
+  | AfterModelDeny Text             -- ^ Discard this chunk with reason
+  | AfterModelHalt                  -- ^ Kill the agent loop (continue=false)
+  deriving (Show, Generic)
+
+instance ToJSON AfterModelOutput where
+  toJSON (AfterModelAllow Nothing) =
+    object ["continue" .= True]
+  toJSON (AfterModelAllow (Just llmResponse)) =
+    object
+      [ "continue" .= True,
+        "hookSpecificOutput" .= object ["llm_response" .= llmResponse]
+      ]
+  toJSON (AfterModelDeny reason) =
+    object
+      [ "decision" .= ("deny" :: Text),
+        "reason" .= reason,
+        "continue" .= True
+      ]
+  toJSON AfterModelHalt =
+    object ["continue" .= False]
+
+-- | Allow with no modifications (AfterModel).
+allowAfterModel :: AfterModelOutput
+allowAfterModel = AfterModelAllow Nothing
+
+-- | Discard this chunk with reason (AfterModel).
+denyAfterModel :: Text -> AfterModelOutput
+denyAfterModel = AfterModelDeny
+
+-- | Halt the agent loop (AfterModel).
+haltAfterModel :: AfterModelOutput
+haltAfterModel = AfterModelHalt
+
+-- | Allow with rewritten response (AfterModel).
+rewriteAfterModel :: Value -> AfterModelOutput
+rewriteAfterModel = AfterModelAllow . Just
