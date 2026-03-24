@@ -74,8 +74,9 @@ impl FileLock {
 
     /// Explicitly release the lock.
     pub fn release(mut self) -> io::Result<()> {
+        fs::remove_file(&self.path)?;
         self.released = true;
-        fs::remove_file(&self.path)
+        Ok(())
     }
 }
 
@@ -180,13 +181,27 @@ fn is_pid_alive(pid: u32) -> bool {
     // Fallback: signal 0 check
     #[cfg(unix)]
     {
-        use std::os::unix::process::parent_id;
-        // Don't consider our own PID or parent PID as "someone else's lock"
-        if pid == std::process::id() || pid == parent_id() {
+        let self_pid = std::process::id();
+        // SAFETY: getppid is a simple libc call returning the parent PID
+        let parent_pid = unsafe { libc::getppid() as u32 };
+        if pid == self_pid || pid == parent_pid {
             return true;
         }
-        // SAFETY: signal 0 doesn't actually send a signal, just checks existence
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        // SAFETY: signal 0 doesn't actually send a signal, just checks existence.
+        // ESRCH = no such process (dead), EPERM = process exists but no permission (alive).
+        let res = unsafe { libc::kill(pid as i32, 0) };
+        if res == 0 {
+            return true;
+        }
+        // Check errno for ESRCH (dead) vs EPERM (alive but no permission)
+        let err = io::Error::last_os_error();
+        if let Some(code) = err.raw_os_error() {
+            if code == libc::ESRCH {
+                return false;
+            }
+        }
+        // EPERM or any other error: conservatively treat as alive
+        true
     }
 
     #[cfg(not(unix))]

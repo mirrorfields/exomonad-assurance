@@ -77,10 +77,16 @@ pub(crate) fn write_to_inbox_at_base(
     let json = serde_json::to_string_pretty(&messages)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // Atomic write: temp file + rename
-    let thread_id = format!("{:?}", std::thread::current().id());
-    let tmp_file = inbox_dir.join(format!(".{}.{}.{}.json.tmp", recipient, Utc::now().timestamp_nanos_opt().unwrap_or(0), thread_id));
-    std::fs::write(&tmp_file, &json)?;
+    // Atomic write: temp file + fsync + rename (stable name under lock)
+    let tmp_file = inbox_dir.join(format!(".{}.json.tmp", recipient));
+    {
+        let f = std::fs::File::create(&tmp_file)?;
+        use std::io::Write;
+        let mut writer = std::io::BufWriter::new(&f);
+        writer.write_all(json.as_bytes())?;
+        writer.flush()?;
+        f.sync_all()?;
+    }
     std::fs::rename(&tmp_file, &inbox_file)?;
 
     if let Err(e) = fsync_dir(&inbox_dir) {
@@ -119,8 +125,18 @@ pub(crate) fn compact_inbox_at_base(base: &Path, team: &str, recipient: &str) ->
     let _lock = FileLock::acquire(&inbox_file, Duration::from_secs(30))?;
 
     let content = std::fs::read_to_string(&inbox_file)?;
-    let messages: Vec<TeamsMessage> = serde_json::from_str(&content).unwrap_or_default();
+    let messages: Vec<TeamsMessage> = match serde_json::from_str(&content) {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            debug!(error = %e, "Failed to parse inbox JSON during compaction; aborting without modifying file");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse inbox JSON: {e}"),
+            ));
+        }
+    };
 
+    let total_before = messages.len();
     let mut compacted = Vec::new();
     // Always keep unread messages
     let (unread, read): (Vec<_>, Vec<_>) = messages.into_iter().partition(|m| !m.read);
@@ -157,13 +173,20 @@ pub(crate) fn compact_inbox_at_base(base: &Path, team: &str, recipient: &str) ->
     let json = serde_json::to_string_pretty(&compacted)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let tmp_file = inbox_dir.join(format!(".{}.compact.json.tmp", recipient));
-    std::fs::write(&tmp_file, &json)?;
+    {
+        let f = std::fs::File::create(&tmp_file)?;
+        use std::io::Write;
+        let mut writer = std::io::BufWriter::new(&f);
+        writer.write_all(json.as_bytes())?;
+        writer.flush()?;
+        f.sync_all()?;
+    }
     std::fs::rename(&tmp_file, &inbox_file)?;
     if let Err(e) = fsync_dir(&inbox_dir) {
         debug!(error = %e, "fsync on inbox dir failed during compaction");
     }
 
-    info!(team = %team, recipient = %recipient, before = read_len, after = compacted.len(), "Inbox compacted");
+    info!(team = %team, recipient = %recipient, before = total_before, after = compacted.len(), "Inbox compacted");
     Ok(())
 }
 
