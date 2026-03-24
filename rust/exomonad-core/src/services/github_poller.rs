@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 type PluginMap = Arc<RwLock<HashMap<crate::AgentName, Arc<PluginManager>>>>;
 
@@ -318,14 +318,44 @@ impl GitHubPoller {
             "GitHub poller started"
         );
 
-        let mut interval = tokio::time::interval(self.poll_interval);
-        // First tick completes immediately
-        interval.tick().await;
+        let base_interval = self.poll_interval;
+        let max_backoff = Duration::from_secs(600); // 10 minutes max
+        let mut consecutive_failures: u32 = 0;
 
         loop {
-            interval.tick().await;
-            if let Err(e) = self.poll_cycle().await {
-                error!("GitHub poller cycle failed: {}", e);
+            let sleep_duration = if consecutive_failures == 0 {
+                base_interval
+            } else {
+                let backoff = base_interval * 2u32.saturating_pow(consecutive_failures.min(6));
+                backoff.min(max_backoff)
+            };
+
+            tokio::time::sleep(sleep_duration).await;
+
+            match self.poll_cycle().await {
+                Ok(()) => {
+                    if consecutive_failures > 0 {
+                        info!(
+                            previous_failures = consecutive_failures,
+                            "GitHub poller recovered"
+                        );
+                    }
+                    consecutive_failures = 0;
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    let next_retry_secs = if consecutive_failures == 0 {
+                        base_interval.as_secs()
+                    } else {
+                        let backoff = base_interval * 2u32.saturating_pow(consecutive_failures.min(6));
+                        backoff.min(max_backoff).as_secs()
+                    };
+                    warn!(
+                        consecutive_failures,
+                        next_retry_secs,
+                        "GitHub poller cycle failed: {}", e
+                    );
+                }
             }
         }
     }
@@ -548,8 +578,7 @@ impl GitHubPoller {
         let prs = match prs_page {
             Ok(page) => page.into_iter().collect::<Vec<_>>(),
             Err(e) => {
-                warn!("Failed to fetch PRs via Octocrab: {}", map_octo_err(e));
-                return Ok(());
+                return Err(anyhow::anyhow!("Failed to fetch PRs: {}", map_octo_err(e)));
             }
         };
 
