@@ -470,7 +470,7 @@ impl AgentControlService {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        let mcp_content = Self::generate_mcp_config(agent_name, agent_type, role, &self.wasm_name);
+        let mcp_content = Self::generate_mcp_config(agent_name, agent_type, role, &self.wasm_name, &self.extra_mcp_servers);
 
         match agent_type {
             AgentType::Claude => {
@@ -589,77 +589,101 @@ impl AgentControlService {
     }
 
     /// Generate MCP configuration JSON for an agent using stdio transport.
-    pub(crate) fn generate_mcp_config(name: &str, agent_type: AgentType, role: &str, wasm_name: &str) -> String {
+    ///
+    /// `extra_mcp_servers` are merged into the `mcpServers` object alongside the
+    /// core exomonad entry, giving spawned agents access to the same extra servers
+    /// (e.g. metacog, notebooklm) configured in the project's `config.toml`.
+    pub(crate) fn generate_mcp_config(
+        name: &str,
+        agent_type: AgentType,
+        role: &str,
+        wasm_name: &str,
+        extra_mcp_servers: &HashMap<String, serde_json::Value>,
+    ) -> String {
         match agent_type {
-            AgentType::Claude => serde_json::to_string_pretty(&serde_json::json!({
-                "mcpServers": {
-                    "exomonad": {
-                        "type": "stdio",
-                        "command": "exomonad",
-                        "args": ["mcp-stdio", "--role", role, "--name", name]
+            AgentType::Claude => {
+                let mut config = serde_json::json!({
+                    "mcpServers": {
+                        "exomonad": {
+                            "type": "stdio",
+                            "command": "exomonad",
+                            "args": ["mcp-stdio", "--role", role, "--name", name]
+                        }
+                    }
+                });
+                if let Some(servers) = config["mcpServers"].as_object_mut() {
+                    for (k, v) in extra_mcp_servers {
+                        servers.insert(k.clone(), v.clone());
                     }
                 }
-            }))
-            .unwrap(),
-            AgentType::Gemini => serde_json::to_string_pretty(&serde_json::json!({
-                "mcpServers": {
-                    "exomonad": {
-                        "type": "stdio",
-                        "command": "exomonad",
-                        "args": ["mcp-stdio", "--role", role, "--name", name]
+                serde_json::to_string_pretty(&config).unwrap()
+            }
+            AgentType::Gemini => {
+                let mut config = serde_json::json!({
+                    "mcpServers": {
+                        "exomonad": {
+                            "type": "stdio",
+                            "command": "exomonad",
+                            "args": ["mcp-stdio", "--role", role, "--name", name]
+                        }
+                    },
+                    "context": {
+                        "fileName": ["GEMINI.md", format!(".exo/roles/{}/context/{}.md", wasm_name, role)]
+                    },
+                    "hooks": {
+                        "BeforeTool": [
+                            {
+                                "matcher": "*",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "exomonad hook before-tool --runtime gemini"
+                                    }
+                                ]
+                            }
+                        ],
+                        "BeforeModel": [
+                            {
+                                "matcher": "*",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "exomonad hook before-model --runtime gemini"
+                                    }
+                                ]
+                            }
+                        ],
+                        "AfterModel": [
+                            {
+                                "matcher": "*",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "exomonad hook after-model --runtime gemini"
+                                    }
+                                ]
+                            }
+                        ],
+                        "AfterAgent": [
+                            {
+                                "matcher": "*",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "exomonad hook after-agent --runtime gemini"
+                                    }
+                                ]
+                            }
+                        ]
                     }
-                },
-                "context": {
-                    "fileName": ["GEMINI.md", format!(".exo/roles/{}/context/{}.md", wasm_name, role)]
-                },
-                "hooks": {
-                    "BeforeTool": [
-                        {
-                            "matcher": "*",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "exomonad hook before-tool --runtime gemini"
-                                }
-                            ]
-                        }
-                    ],
-                    "BeforeModel": [
-                        {
-                            "matcher": "*",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "exomonad hook before-model --runtime gemini"
-                                }
-                            ]
-                        }
-                    ],
-                    "AfterModel": [
-                        {
-                            "matcher": "*",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "exomonad hook after-model --runtime gemini"
-                                }
-                            ]
-                        }
-                    ],
-                    "AfterAgent": [
-                        {
-                            "matcher": "*",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "exomonad hook after-agent --runtime gemini"
-                                }
-                            ]
-                        }
-                    ]
+                });
+                if let Some(servers) = config["mcpServers"].as_object_mut() {
+                    for (k, v) in extra_mcp_servers {
+                        servers.insert(k.clone(), v.clone());
+                    }
                 }
-            }))
-            .unwrap(),
+                serde_json::to_string_pretty(&config).unwrap()
+            }
             AgentType::Shoal => serde_json::to_string_pretty(&serde_json::json!({
                 "command": "exomonad",
                 "args": ["mcp-stdio", "--role", role, "--name", name]
@@ -779,7 +803,7 @@ mod tests {
     #[test]
     fn test_claude_mcp_config_format() {
         let config =
-            AgentControlService::generate_mcp_config("test-claude", AgentType::Claude, "tl", "devswarm");
+            AgentControlService::generate_mcp_config("test-claude", AgentType::Claude, "tl", "devswarm", &HashMap::new());
         let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(parsed["mcpServers"]["exomonad"]["type"], "stdio");
         assert_eq!(parsed["mcpServers"]["exomonad"]["command"], "exomonad");
@@ -793,7 +817,7 @@ mod tests {
     #[test]
     fn test_gemini_mcp_config_format() {
         let config =
-            AgentControlService::generate_mcp_config("test-gemini", AgentType::Gemini, "dev", "devswarm");
+            AgentControlService::generate_mcp_config("test-gemini", AgentType::Gemini, "dev", "devswarm", &HashMap::new());
         let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(parsed["mcpServers"]["exomonad"]["command"], "exomonad");
         let args = parsed["mcpServers"]["exomonad"]["args"].as_array().unwrap();
@@ -839,7 +863,7 @@ mod tests {
 
     #[test]
     fn test_gemini_worker_settings_schema_compliance() {
-        let settings = AgentControlService::generate_gemini_worker_settings("test-worker", None);
+        let settings = AgentControlService::generate_gemini_worker_settings("test-worker", None, &HashMap::new());
 
         // 1. MCP config uses stdio transport
         assert_eq!(settings["mcpServers"]["exomonad"]["type"], "stdio");

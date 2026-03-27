@@ -319,12 +319,16 @@ impl AgentControlService {
     ///
     /// `context_path` is an optional absolute path to the role context file.
     /// Using an absolute path ensures workers spawned from worktrees can find the context.
-    pub(crate) fn generate_gemini_worker_settings(agent_name: &str, context_path: Option<&Path>) -> serde_json::Value {
+    pub(crate) fn generate_gemini_worker_settings(
+        agent_name: &str,
+        context_path: Option<&Path>,
+        extra_mcp_servers: &HashMap<String, serde_json::Value>,
+    ) -> serde_json::Value {
         let mut context_files = vec![serde_json::Value::String("GEMINI.md".to_string())];
         if let Some(path) = context_path {
             context_files.push(serde_json::Value::String(path.to_string_lossy().to_string()));
         }
-        serde_json::json!({
+        let mut settings = serde_json::json!({
             "mcpServers": {
                 "exomonad": {
                     "type": "stdio",
@@ -381,7 +385,13 @@ impl AgentControlService {
                     }
                 ]
             }
-        })
+        });
+        if let Some(servers) = settings["mcpServers"].as_object_mut() {
+            for (k, v) in extra_mcp_servers {
+                servers.insert(k.clone(), v.clone());
+            }
+        }
+        settings
     }
 
     /// Spawn a Gemini worker agent (Phase 2/3).
@@ -447,7 +457,7 @@ impl AgentControlService {
             let parent_bb = self.effective_birth_branch(Some(&ctx.birth_branch));
             fs::write(agent_config_dir.join(".birth_branch"), parent_bb.as_str()).await?;
             let context_path = self.resolve_role_context("worker");
-            let settings = Self::generate_gemini_worker_settings(&internal_name, context_path.as_deref());
+            let settings = Self::generate_gemini_worker_settings(&internal_name, context_path.as_deref(), &self.extra_mcp_servers);
             fs::write(&settings_path, serde_json::to_string_pretty(&settings)?).await?;
             info!(
                 path = %settings_path.display(),

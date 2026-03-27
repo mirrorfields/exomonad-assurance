@@ -27,6 +27,35 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, info, instrument, warn, Instrument};
 
 // ============================================================================
+// Config Helpers
+// ============================================================================
+
+/// Convert typed `McpServerConfig` entries into pre-serialized JSON values
+/// for propagation to spawned agent configs.
+fn serialize_extra_mcp_servers(
+    servers: &HashMap<String, exomonad::config::McpServerConfig>,
+) -> HashMap<String, serde_json::Value> {
+    servers
+        .iter()
+        .map(|(name, server)| {
+            let value = match server {
+                exomonad::config::McpServerConfig::Http { url, headers } => {
+                    let mut e = serde_json::json!({"type": "http", "url": url});
+                    if !headers.is_empty() {
+                        e["headers"] = serde_json::to_value(headers).unwrap_or_default();
+                    }
+                    e
+                }
+                exomonad::config::McpServerConfig::Stdio { command, args } => {
+                    serde_json::json!({"type": "stdio", "command": command, "args": args})
+                }
+            };
+            (name.clone(), value)
+        })
+        .collect()
+}
+
+// ============================================================================
 // REST API Types
 // ============================================================================
 
@@ -840,6 +869,7 @@ Run `exomonad recompile` first to build it.",
         agent_control.with_birth_branch(resolve_agent_birth_branch(&worktree_base, "root").await?);
     agent_control = agent_control.with_tmux_session(config.tmux_session.clone());
     agent_control = agent_control.with_yolo(config.yolo);
+    agent_control = agent_control.with_extra_mcp_servers(serialize_extra_mcp_servers(&config.extra_mcp_servers));
     let event_session_id = uuid::Uuid::new_v4().to_string();
     let agent_control = Arc::new(agent_control);
 

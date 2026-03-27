@@ -498,6 +498,8 @@ pub struct AgentControlService {
     pub(crate) yolo: bool,
     /// WASM name for role context resolution (default: "devswarm").
     pub(crate) wasm_name: String,
+    /// Pre-serialized extra MCP servers to include in spawned agent configs.
+    pub(crate) extra_mcp_servers: HashMap<String, serde_json::Value>,
 }
 
 impl AgentControlService {
@@ -519,6 +521,7 @@ impl AgentControlService {
             acp_registry: None,
             yolo: false,
             wasm_name: "devswarm".to_string(),
+            extra_mcp_servers: HashMap::new(),
         }
     }
 
@@ -556,6 +559,12 @@ impl AgentControlService {
     /// Enable `--yolo` flag for spawned Gemini agents.
     pub fn with_yolo(mut self, yolo: bool) -> Self {
         self.yolo = yolo;
+        self
+    }
+
+    /// Set extra MCP servers to include in spawned agent configs.
+    pub fn with_extra_mcp_servers(mut self, servers: HashMap<String, serde_json::Value>) -> Self {
+        self.extra_mcp_servers = servers;
         self
     }
 
@@ -632,6 +641,7 @@ impl AgentControlService {
             acp_registry: None,
             yolo: false,
             wasm_name: "devswarm".to_string(),
+            extra_mcp_servers: HashMap::new(),
         })
     }
 
