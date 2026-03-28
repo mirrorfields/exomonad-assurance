@@ -345,8 +345,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        for handle in handles {
-            handle.join().unwrap().unwrap();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for (i, result) in results.iter().enumerate() {
+            if let Err(e) = result {
+                panic!("Thread {} failed: {}", i, e);
+            }
         }
 
         let inbox_file = inbox_dir.join(format!("{}.json", recipient));
