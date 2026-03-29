@@ -199,10 +199,13 @@ impl AgentHandler {
             inbox_name: parent_team.inbox_name.clone(),
         };
 
+        // Register under agent_name and slug — NOT birth_branch.
+        // Sub-TLs don't have CC Teams inboxes (they never call TeamCreate),
+        // so registering their birth_branch would cause deliver_to_agent to
+        // write to the parent's inbox (wrong recipient) instead of falling
+        // back to tmux (correct recipient).
         team_reg.register(&child_agent_name, team_info.clone()).await;
-        team_reg.register(&child_birth_branch, team_info.clone()).await;
 
-        // Also register without -claude suffix for broader lookup
         let slug = crate::services::agent_control::slugify(child_branch);
         if slug != child_agent_name {
             team_reg.register(&slug, team_info).await;
