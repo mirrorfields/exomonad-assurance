@@ -156,7 +156,10 @@ impl EventEffects for EventHandler {
         let (agent_id, agent_id_source) = if req.agent_id.is_empty() {
             (agent_name.clone(), "ctx")
         } else {
-            (crate::domain::AgentName::from(req.agent_id.as_str()), "request")
+            (
+                crate::domain::AgentName::from(req.agent_id.as_str()),
+                "request",
+            )
         };
 
         tracing::debug!(

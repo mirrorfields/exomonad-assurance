@@ -20,6 +20,7 @@ pub mod log;
 pub mod merge_pr;
 pub mod mutex_registry;
 pub mod repo;
+pub mod resilience;
 pub mod secrets;
 pub mod supervisor_registry;
 pub mod synthetic_members;
@@ -36,10 +37,19 @@ pub use self::event_log::EventLog;
 pub use self::event_queue::EventQueue;
 pub use self::filesystem::FileSystemService;
 pub use self::git_worktree::GitWorktreeService;
+pub use self::github::GitHubClient;
 pub use self::mutex_registry::MutexRegistry;
 pub use self::secrets::Secrets;
 pub use self::supervisor_registry::SupervisorRegistry;
+use std::sync::Arc;
 use thiserror::Error;
+
+/// Shared services context, constructed once and threaded through the app.
+#[derive(Clone)]
+pub struct Services {
+    pub github_client: Option<Arc<GitHubClient>>,
+    pub event_log: Option<Arc<EventLog>>,
+}
 
 /// Errors that can occur during services validation.
 ///

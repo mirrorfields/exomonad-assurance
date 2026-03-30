@@ -832,11 +832,11 @@ Run `exomonad recompile` first to build it.",
     let git_wt = Arc::new(
         exomonad_core::services::git_worktree::GitWorktreeService::new(project_dir.clone()),
     );
-    let github = secrets
+    let github_client = secrets
         .github_token()
-        .and_then(|t| exomonad_core::services::github::GitHubService::new(t).ok());
+        .map(|_| exomonad_core::services::GitHubClient::new(5));
 
-    if github.is_some() {
+    if github_client.is_some() {
         exomonad_core::services::validate_gh_cli().context("Failed to validate gh CLI")?;
     }
 
@@ -858,7 +858,7 @@ Run `exomonad recompile` first to build it.",
     let project_dir_for_services = project_dir.clone();
     let mut agent_control = exomonad_core::services::agent_control::AgentControlService::new(
         project_dir_for_services.clone(),
-        github.clone(),
+        github_client.clone(),
         git_wt.clone(),
     )
     .with_acp_registry(acp_registry.clone())
@@ -909,12 +909,12 @@ Run `exomonad recompile` first to build it.",
         project_dir.clone(),
         event_log.clone(),
     ));
-    builder = builder.with_handlers(exomonad_core::git_handlers(
-        git,
-        github,
-        git_wt,
-        event_log.clone(),
-    ));
+    // Update services with event_log now that it's created
+    let services = exomonad_core::services::Services {
+        github_client: github_client.clone(),
+        event_log: event_log.clone(),
+    };
+    builder = builder.with_handlers(exomonad_core::git_handlers(&services, git, git_wt));
     let orch_handlers = exomonad_core::orchestration_handlers(
         agent_control.clone(),
         event_queue.clone(),
@@ -984,7 +984,8 @@ Run `exomonad recompile` first to build it.",
     let mut poller = exomonad_core::services::github_poller::GitHubPoller::new(
         event_queue.clone(),
         project_dir.clone(),
-    );
+    )
+    .with_github_client(github_client);
     poller = poller.with_team_registry(team_registry);
     poller = poller.with_acp_registry(acp_registry.clone());
     poller = poller.with_plugins(plugins.clone());

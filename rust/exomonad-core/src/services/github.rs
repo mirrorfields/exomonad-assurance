@@ -5,6 +5,9 @@ use crate::{FFIBoundary, GithubOwner, GithubRepo};
 use anyhow::{anyhow, Context, Result};
 use octocrab::{models, params, Octocrab, OctocrabBuilder};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 use tracing::info;
 
@@ -41,9 +44,7 @@ pub fn build_octocrab() -> Result<Octocrab> {
     let mut builder = OctocrabBuilder::new().personal_token(token);
 
     if let Some(ref url) = base_url {
-        builder = builder
-            .base_uri(url)
-            .context("Invalid GITHUB_API_URL")?;
+        builder = builder.base_uri(url).context("Invalid GITHUB_API_URL")?;
     }
 
     let client = builder.build().context("Failed to build Octocrab client")?;
@@ -83,6 +84,70 @@ pub fn map_octo_err(e: octocrab::Error) -> String {
         _ => {}
     }
     format!("{}", e)
+}
+
+// ============================================================================
+// Shared GitHub Client
+// ============================================================================
+
+/// Shared GitHub API client with health tracking and automatic rebuild.
+///
+/// Wraps an `Octocrab` instance behind a read-write lock with consecutive-failure
+/// tracking. When failures exceed the rebuild threshold, the client is reconstructed
+/// from environment variables (which may have been updated since the original build).
+pub struct GitHubClient {
+    client: RwLock<Option<Octocrab>>,
+    consecutive_failures: AtomicU32,
+    rebuild_threshold: u32,
+}
+
+impl GitHubClient {
+    /// Create a new client, building from `GITHUB_TOKEN` env var.
+    pub fn new(rebuild_threshold: u32) -> Arc<Self> {
+        Arc::new(Self {
+            client: RwLock::new(build_octocrab().ok()),
+            consecutive_failures: AtomicU32::new(0),
+            rebuild_threshold,
+        })
+    }
+
+    /// Wrap a pre-built `Octocrab` (for tests with mock servers).
+    /// Rebuild threshold is set to `u32::MAX` so it never triggers.
+    pub fn from_octocrab(client: Octocrab) -> Arc<Self> {
+        Arc::new(Self {
+            client: RwLock::new(Some(client)),
+            consecutive_failures: AtomicU32::new(0),
+            rebuild_threshold: u32::MAX,
+        })
+    }
+
+    /// Get a clone of the inner `Octocrab`. Returns error if no token was configured.
+    pub async fn get(&self) -> Result<Octocrab> {
+        self.client
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("GitHub client not available (GITHUB_TOKEN not set or invalid)"))
+    }
+
+    /// Reset failure counter on successful API call.
+    pub fn report_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    /// Increment failure counter. If threshold is hit, rebuild the client from env.
+    pub async fn report_failure(&self) {
+        let prev = self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        if prev + 1 >= self.rebuild_threshold {
+            info!(
+                failures = prev + 1,
+                "Rebuilding octocrab client after consecutive failures"
+            );
+            let mut guard = self.client.write().await;
+            *guard = build_octocrab().ok();
+            self.consecutive_failures.store(0, Ordering::Relaxed);
+        }
+    }
 }
 
 fn octocrab_issue_state(state: models::IssueState) -> ItemState {
@@ -386,11 +451,12 @@ impl FFIBoundary for GithubGetPRReviewCommentsInput {}
 /// # Examples
 ///
 /// ```ignore
-/// use crate::services::github::{GitHubService, Repo};
+/// use crate::services::github::{GitHubClient, GitHubService, Repo};
 /// use crate::{GithubOwner, GithubRepo};
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let github = GitHubService::new("ghp_...".to_string())?;
+/// let client = GitHubClient::new(5);
+/// let github = GitHubService::new(client);
 ///
 /// let repo = Repo {
 ///     owner: GithubOwner::from("anthropics"),
@@ -404,28 +470,50 @@ impl FFIBoundary for GithubGetPRReviewCommentsInput {}
 /// ```
 #[derive(Clone)]
 pub struct GitHubService {
-    client: Octocrab,
+    github: Arc<GitHubClient>,
 }
 
 impl GitHubService {
-    /// Create a new GitHubService with the given personal access token.
+    /// Create a new GitHubService backed by a shared `GitHubClient`.
+    pub fn new(github: Arc<GitHubClient>) -> Self {
+        Self { github }
+    }
+
+    /// Execute a GitHub API call with automatic success/failure tracking.
     ///
-    /// # Arguments
-    ///
-    /// * `token` - GitHub personal access token (starts with "ghp_" or "github_pat_")
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the octocrab client fails to initialize.
-    pub fn new(token: String) -> Result<Self> {
-        let mut builder = OctocrabBuilder::new().personal_token(token);
-        if let Ok(base_url) = std::env::var("GITHUB_API_URL") {
-            builder = builder
-                .base_uri(&base_url)
-                .context("Invalid GITHUB_API_URL")?;
+    /// For retried calls, use `tracked_retry` instead.
+    async fn tracked<T, F, Fut>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(Octocrab) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let client = self.github.get().await?;
+        let result = f(client).await;
+        match &result {
+            Ok(_) => self.github.report_success(),
+            Err(_) => self.github.report_failure().await,
         }
-        let client = builder.build()?;
-        Ok(Self { client })
+        result
+    }
+
+    /// Execute a GitHub API call with retry and automatic success/failure tracking.
+    #[allow(dead_code)]
+    async fn tracked_retry<T, F, Fut>(
+        &self,
+        policy: &super::resilience::RetryPolicy,
+        f: F,
+    ) -> Result<T>
+    where
+        F: Fn(Octocrab) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let client = self.github.get().await?;
+        let result = super::resilience::retry(policy, || f(client.clone())).await;
+        match &result {
+            Ok(_) => self.github.report_success(),
+            Err(_) => self.github.report_failure().await,
+        }
+        result
     }
 
     /// List issues in a repository.
@@ -452,105 +540,123 @@ impl GitHubService {
         filter: Option<&IssueFilter>,
     ) -> Result<Vec<Issue>> {
         let repo_name = format!("{}/{}", repo.owner, repo.name);
+        let filter_clone = filter.cloned();
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
         info!(repo = %repo_name, "GitHub API: Listing issues");
 
-        let issues_handler = self.client.issues(repo.owner.as_str(), repo.name.as_str());
-        let mut builder = issues_handler.list();
+        self.tracked(|client| async move {
+            let issues_handler = client.issues(owner.as_str(), name.as_str());
+            let mut builder = issues_handler.list();
 
-        if let Some(f) = filter {
-            if let Some(state) = &f.state {
-                let s = match state {
-                    crate::domain::FilterState::Open => params::State::Open,
-                    crate::domain::FilterState::Closed => params::State::Closed,
-                    crate::domain::FilterState::All => params::State::All,
-                };
-                builder = builder.state(s);
-            }
-            if let Some(labels) = &f.labels {
-                if !labels.is_empty() {
-                    // Octocrab expects generic iterable
-                    builder = builder.labels(labels);
+            if let Some(f) = filter_clone.as_ref() {
+                if let Some(state) = &f.state {
+                    let s = match state {
+                        crate::domain::FilterState::Open => params::State::Open,
+                        crate::domain::FilterState::Closed => params::State::Closed,
+                        crate::domain::FilterState::All => params::State::All,
+                    };
+                    builder = builder.state(s);
+                }
+                if let Some(labels) = &f.labels {
+                    if !labels.is_empty() {
+                        builder = builder.labels(labels);
+                    }
                 }
             }
-        }
 
-        let page = timeout(API_TIMEOUT, builder.send()).await.map_err(|_| {
-            anyhow!(
-                "GitHub API list_issues timed out after {}s",
-                API_TIMEOUT.as_secs()
-            )
-        })??;
-
-        let issues = timeout(API_TIMEOUT, self.client.all_pages(page))
-            .await
-            .map_err(|_| {
+            let page = timeout(API_TIMEOUT, builder.send()).await.map_err(|_| {
                 anyhow!(
-                    "GitHub API all_pages timed out after {}s",
+                    "GitHub API list_issues timed out after {}s",
                     API_TIMEOUT.as_secs()
                 )
             })??;
 
-        info!(
-            repo = %repo_name,
-            count = issues.len(),
-            "GitHub API: List issues successful"
-        );
+            let issues = timeout(API_TIMEOUT, client.all_pages(page))
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "GitHub API all_pages timed out after {}s",
+                        API_TIMEOUT.as_secs()
+                    )
+                })??;
 
-        issues.into_iter().map(Issue::try_from).collect()
+            info!(
+                repo = %repo_name,
+                count = issues.len(),
+                "GitHub API: List issues successful"
+            );
+
+            issues.into_iter().map(Issue::try_from).collect()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self))]
     pub async fn get_issue(&self, repo: &Repo, number: IssueNumber) -> Result<Issue> {
         let repo_name = format!("{}/{}", repo.owner, repo.name);
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
         info!(repo = %repo_name, number = number.as_u64(), "GitHub API: Get issue");
 
-        let issue = timeout(
-            API_TIMEOUT,
-            self.client
-                .issues(repo.owner.as_str(), repo.name.as_str())
-                .get(number.as_u64()),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "GitHub API get_issue timed out after {}s",
-                API_TIMEOUT.as_secs()
+        self.tracked(|client| async move {
+            let issue = timeout(
+                API_TIMEOUT,
+                client
+                    .issues(owner.as_str(), name.as_str())
+                    .get(number.as_u64()),
             )
-        })??;
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "GitHub API get_issue timed out after {}s",
+                    API_TIMEOUT.as_secs()
+                )
+            })??;
 
-        info!(repo = %repo_name, number = number.as_u64(), "GitHub API: Get issue successful");
+            info!(repo = %repo_name, number = number.as_u64(), "GitHub API: Get issue successful");
 
-        issue.try_into()
+            issue.try_into()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self))]
     pub async fn create_pr(&self, repo: &Repo, spec: CreatePRSpec) -> Result<PullRequest> {
         let repo_name = format!("{}/{}", repo.owner, repo.name);
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
         info!(repo = %repo_name, title = %spec.title, "GitHub API: Create PR");
 
-        let pr = timeout(
-            API_TIMEOUT,
-            self.client
-                .pulls(repo.owner.as_str(), repo.name.as_str())
-                .create(spec.title, spec.head.to_string(), spec.base.to_string())
-                .body(spec.body)
-                .send(),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "GitHub API create_pr timed out after {}s",
-                API_TIMEOUT.as_secs()
+        self.tracked(|client| async move {
+            let pr = timeout(
+                API_TIMEOUT,
+                client
+                    .pulls(owner.as_str(), name.as_str())
+                    .create(spec.title, spec.head.to_string(), spec.base.to_string())
+                    .body(spec.body)
+                    .send(),
             )
-        })??;
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "GitHub API create_pr timed out after {}s",
+                    API_TIMEOUT.as_secs()
+                )
+            })??;
 
-        info!(
-            repo = %repo_name,
-            number = pr.number,
-            "GitHub API: Create PR successful"
-        );
+            info!(
+                repo = %repo_name,
+                number = pr.number,
+                "GitHub API: Create PR successful"
+            );
 
-        pr.try_into()
+            pr.try_into()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -560,121 +666,139 @@ impl GitHubService {
         filter: Option<&PRFilter>,
     ) -> Result<Vec<PullRequest>> {
         let repo_name = format!("{}/{}", repo.owner, repo.name);
+        let filter_clone = filter.cloned();
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
         info!(repo = %repo_name, "GitHub API: List PRs");
 
-        let pulls_handler = self.client.pulls(repo.owner.as_str(), repo.name.as_str());
-        let mut builder = pulls_handler.list();
+        self.tracked(|client| async move {
+            let pulls_handler = client.pulls(owner.as_str(), name.as_str());
+            let mut builder = pulls_handler.list();
 
-        if let Some(f) = filter {
-            if let Some(state) = &f.state {
-                let s = match state {
-                    crate::domain::FilterState::Open => params::State::Open,
-                    crate::domain::FilterState::Closed => params::State::Closed,
-                    crate::domain::FilterState::All => params::State::All,
-                };
-                builder = builder.state(s);
+            if let Some(f) = filter_clone.as_ref() {
+                if let Some(state) = &f.state {
+                    let s = match state {
+                        crate::domain::FilterState::Open => params::State::Open,
+                        crate::domain::FilterState::Closed => params::State::Closed,
+                        crate::domain::FilterState::All => params::State::All,
+                    };
+                    builder = builder.state(s);
+                }
+                if let Some(limit) = f.limit {
+                    builder = builder.per_page(limit.min(100) as u8);
+                }
             }
-            if let Some(limit) = f.limit {
-                builder = builder.per_page(limit.min(100) as u8);
-            }
-        }
 
-        let page = timeout(API_TIMEOUT, builder.send()).await.map_err(|_| {
-            anyhow!(
-                "GitHub API list_prs timed out after {}s",
-                API_TIMEOUT.as_secs()
-            )
-        })??;
-        // For PRs, we might not want all pages if a limit was set, but octocrab's list() returns a Page.
-        // If limit was set, we used per_page.
+            let page = timeout(API_TIMEOUT, builder.send()).await.map_err(|_| {
+                anyhow!(
+                    "GitHub API list_prs timed out after {}s",
+                    API_TIMEOUT.as_secs()
+                )
+            })??;
 
-        info!(
-            repo = %repo_name,
-            "GitHub API: List PRs successful (page 1)"
-        );
+            info!(
+                repo = %repo_name,
+                "GitHub API: List PRs successful (page 1)"
+            );
 
-        page.into_iter().map(PullRequest::try_from).collect()
+            page.into_iter().map(PullRequest::try_from).collect()
+        })
+        .await
     }
 
     /// Get a single pull request by number.
     #[tracing::instrument(skip(self))]
     pub async fn get_pr(&self, repo: &Repo, number: PRNumber) -> Result<PullRequest> {
-        let pulls_handler = self.client.pulls(repo.owner.as_str(), repo.name.as_str());
-        let pr = timeout(API_TIMEOUT, pulls_handler.get(number.as_u64()))
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "GitHub API get_pr timed out after {}s",
-                    API_TIMEOUT.as_secs()
-                )
-            })??;
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
 
-        info!(
-            repo = format!("{}/{}", repo.owner, repo.name),
-            number = number.as_u64(),
-            "GitHub API: Get PR successful"
-        );
+        self.tracked(|client| async move {
+            let pulls_handler = client.pulls(owner.as_str(), name.as_str());
+            let pr = timeout(API_TIMEOUT, pulls_handler.get(number.as_u64()))
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "GitHub API get_pr timed out after {}s",
+                        API_TIMEOUT.as_secs()
+                    )
+                })??;
 
-        pr.try_into()
+            info!(
+                repo = format!("{}/{}", owner, name),
+                number = number.as_u64(),
+                "GitHub API: Get PR successful"
+            );
+
+            pr.try_into()
+        })
+        .await
     }
 
     /// Get reviews for a pull request.
     #[tracing::instrument(skip(self))]
     pub async fn get_pr_reviews(&self, repo: &Repo, number: PRNumber) -> Result<Vec<Review>> {
-        let route = format!(
-            "/repos/{}/{}/pulls/{}/reviews",
-            repo.owner,
-            repo.name,
-            number.as_u64()
-        );
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
         info!(
-            repo = format!("{}/{}", repo.owner, repo.name),
+            repo = format!("{}/{}", owner, name),
             number = number.as_u64(),
             "GitHub API: Get PR reviews"
         );
 
-        let response: Vec<serde_json::Value> =
-            timeout(API_TIMEOUT, self.client.get(&route, None::<&()>))
-                .await
-                .map_err(|_| {
-                    anyhow!(
-                        "GitHub API get_pr_reviews timed out after {}s",
-                        API_TIMEOUT.as_secs()
-                    )
-                })??;
+        self.tracked(|client| async move {
+            let route = format!(
+                "/repos/{}/{}/pulls/{}/reviews",
+                owner,
+                name,
+                number.as_u64()
+            );
 
-        let reviews: Vec<Review> = response
-            .into_iter()
-            .map(|v| {
-                let state_str = v["state"].as_str().unwrap_or("");
-                let state = match state_str {
-                    "APPROVED" => DomainReviewState::Approved,
-                    "CHANGES_REQUESTED" => DomainReviewState::ChangesRequested,
-                    "COMMENTED" => DomainReviewState::Commented,
-                    "PENDING" => DomainReviewState::Pending,
-                    "DISMISSED" => DomainReviewState::Dismissed,
-                    _ => DomainReviewState::Pending,
-                };
-                let commit_str = v["commit_id"].as_str().unwrap_or("");
-                Review {
-                    id: v["id"].as_u64().unwrap_or(0),
-                    author: v["user"]["login"].as_str().unwrap_or("unknown").to_string(),
-                    state,
-                    body: v["body"].as_str().unwrap_or("").to_string(),
-                    commit_id: if commit_str.is_empty() {
-                        CommitSha::from("unknown")
-                    } else {
-                        CommitSha::from(commit_str)
-                    },
-                }
-            })
-            .collect();
+            let response: Vec<serde_json::Value> =
+                timeout(API_TIMEOUT, client.get(&route, None::<&()>))
+                    .await
+                    .map_err(|_| {
+                        anyhow!(
+                            "GitHub API get_pr_reviews timed out after {}s",
+                            API_TIMEOUT.as_secs()
+                        )
+                    })??;
 
-        info!(
-            count = reviews.len(),
-            "GitHub API: Get PR reviews successful"
-        );
-        Ok(reviews)
+            let reviews: Vec<Review> = response
+                .into_iter()
+                .map(|v| {
+                    let state_str = v["state"].as_str().unwrap_or("");
+                    let state = match state_str {
+                        "APPROVED" => DomainReviewState::Approved,
+                        "CHANGES_REQUESTED" => DomainReviewState::ChangesRequested,
+                        "COMMENTED" => DomainReviewState::Commented,
+                        "PENDING" => DomainReviewState::Pending,
+                        "DISMISSED" => DomainReviewState::Dismissed,
+                        _ => DomainReviewState::Pending,
+                    };
+                    let commit_str = v["commit_id"].as_str().unwrap_or("");
+                    Review {
+                        id: v["id"].as_u64().unwrap_or(0),
+                        author: v["user"]["login"].as_str().unwrap_or("unknown").to_string(),
+                        state,
+                        body: v["body"].as_str().unwrap_or("").to_string(),
+                        commit_id: if commit_str.is_empty() {
+                            CommitSha::from("unknown")
+                        } else {
+                            CommitSha::from(commit_str)
+                        },
+                    }
+                })
+                .collect();
+
+            info!(
+                count = reviews.len(),
+                "GitHub API: Get PR reviews successful"
+            );
+            Ok(reviews)
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -683,50 +807,92 @@ impl GitHubService {
         repo: &Repo,
         head: &BranchName,
     ) -> Result<Option<PullRequest>> {
-        let pulls_handler = self.client.pulls(repo.owner.as_str(), repo.name.as_str());
-        let page = timeout(
-            API_TIMEOUT,
-            pulls_handler
-                .list()
-                .state(params::State::Open)
-                .head(format!("{}:{}", repo.owner, head.as_str()))
-                .send(),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "GitHub API get_pr_for_branch timed out after {}s",
-                API_TIMEOUT.as_secs()
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+        let head = head.clone();
+
+        self.tracked(|client| async move {
+            let pulls_handler = client.pulls(owner.as_str(), name.as_str());
+            let page = timeout(
+                API_TIMEOUT,
+                pulls_handler
+                    .list()
+                    .state(params::State::Open)
+                    .head(format!("{}:{}", owner, head.as_str()))
+                    .send(),
             )
-        })??;
-
-        let pr = page.into_iter().next();
-
-        match &pr {
-            Some(p) => {
-                tracing::info!(
-                    number = p.number,
-                    head = head.as_str(),
-                    "Found PR for branch"
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "GitHub API get_pr_for_branch timed out after {}s",
+                    API_TIMEOUT.as_secs()
                 )
-            }
-            None => tracing::info!(head = head.as_str(), "No PR found for branch"),
-        }
+            })??;
 
-        pr.map(PullRequest::try_from).transpose()
+            let pr = page.into_iter().next();
+
+            match &pr {
+                Some(p) => {
+                    tracing::info!(
+                        number = p.number,
+                        head = head.as_str(),
+                        "Found PR for branch"
+                    )
+                }
+                None => tracing::info!(head = head.as_str(), "No PR found for branch"),
+            }
+
+            pr.map(PullRequest::try_from).transpose()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self))]
     pub async fn get_pr_review_comments(
         &self,
-        _repo: &Repo,
+        repo: &Repo,
         pr_number: PRNumber,
     ) -> Result<Vec<ReviewComment>> {
-        tracing::debug!(
-            pr_number = pr_number.as_u64(),
-            "Review comment checking is simplified - returning empty"
-        );
-        Ok(vec![])
+        let repo_name = format!("{}/{}", repo.owner, repo.name);
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+
+        info!(repo = %repo_name, pr = pr_number.as_u64(), "GitHub API: Get PR review comments");
+
+        self.tracked(|client| async move {
+            let page = timeout(
+                API_TIMEOUT,
+                client
+                    .pulls(owner.as_str(), name.as_str())
+                    .list_comments(Some(pr_number.as_u64()))
+                    .send(),
+            )
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "GitHub API get_pr_review_comments timed out after {}s",
+                    API_TIMEOUT.as_secs()
+                )
+            })??;
+
+            let comments: Vec<ReviewComment> = page
+                .into_iter()
+                .map(|c| ReviewComment {
+                    id: c.id.into_inner(),
+                    body: c.body,
+                    path: c.path,
+                    line: c.line.map(|l| l as u32),
+                    author: c
+                        .user
+                        .map(|u| u.login)
+                        .unwrap_or_else(|| "unknown".into()),
+                    created_at: c.created_at.to_rfc3339(),
+                })
+                .collect();
+
+            info!(repo = %repo_name, count = comments.len(), "GitHub API: Get PR review comments successful");
+            Ok(comments)
+        }).await
     }
 }
 
@@ -761,7 +927,8 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        (GitHubService { client }, mock_server)
+        let github_client = GitHubClient::from_octocrab(client);
+        (GitHubService::new(github_client), mock_server)
     }
 
     #[tokio::test]

@@ -249,16 +249,39 @@ impl GitHubEffects for GitHubHandler {
         req: GetPullRequestReviewCommentsRequest,
         _ctx: &crate::effects::EffectContext,
     ) -> EffectResult<GetPullRequestReviewCommentsResponse> {
-        // Review comments require additional API work - return empty for now
-        tracing::debug!(
-            owner = %req.owner,
-            repo = %req.repo,
-            number = req.number,
-            "get_pull_request_review_comments: not yet implemented"
+        tracing::info!(owner = %req.owner, repo = %req.repo, number = req.number, "[GitHub] get_pull_request_review_comments starting");
+        let repo = make_repo(&req.owner, &req.repo);
+        let pr_number = PRNumber::try_from(req.number as u64)
+            .map_err(|e| EffectError::invalid_input(e.to_string()))?;
+
+        let raw_comments = self
+            .service
+            .get_pr_review_comments(&repo, pr_number)
+            .await
+            .map_err(|e| EffectError::network_error(e.to_string()))?;
+
+        let comments: Vec<ReviewComment> = raw_comments
+            .into_iter()
+            .map(|c| ReviewComment {
+                id: c.id as i64,
+                author: Some(User {
+                    login: c.author,
+                    id: 0,
+                    avatar_url: String::new(),
+                }),
+                body: c.body,
+                path: c.path,
+                line: c.line.map(|l| l as i32).unwrap_or(0),
+                side: String::new(),
+                created_at: 0,
+            })
+            .collect();
+
+        tracing::info!(
+            count = comments.len(),
+            "[GitHub] get_pull_request_review_comments complete"
         );
-        Ok(GetPullRequestReviewCommentsResponse {
-            comments: Vec::new(),
-        })
+        Ok(GetPullRequestReviewCommentsResponse { comments })
     }
 }
 
@@ -376,7 +399,8 @@ mod tests {
     #[tokio::test]
     async fn test_namespace() {
         let _ctx = test_ctx();
-        let service = GitHubService::new("token".to_string()).unwrap();
+        let client = crate::services::github::GitHubClient::new(5);
+        let service = GitHubService::new(client);
         let handler = GitHubHandler::new(service);
         assert_eq!(handler.namespace(), "github");
     }

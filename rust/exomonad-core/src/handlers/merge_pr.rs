@@ -2,6 +2,7 @@ use crate::effects::{dispatch_merge_pr_effect, EffectResult, MergePrEffects, Res
 use crate::services::event_log::EventLog;
 use crate::services::git_worktree::GitWorktreeService;
 use crate::services::merge_pr;
+use crate::services::GitHubClient;
 use async_trait::async_trait;
 use exomonad_proto::effects::merge_pr::*;
 use std::sync::Arc;
@@ -9,13 +10,15 @@ use tracing::instrument;
 
 pub struct MergePRHandler {
     git_wt: Arc<GitWorktreeService>,
+    github_client: Option<Arc<GitHubClient>>,
     event_log: Option<Arc<EventLog>>,
 }
 
 impl MergePRHandler {
-    pub fn new(git_wt: Arc<GitWorktreeService>) -> Self {
+    pub fn new(git_wt: Arc<GitWorktreeService>, github_client: Option<Arc<GitHubClient>>) -> Self {
         Self {
             git_wt,
+            github_client,
             event_log: None,
         }
     }
@@ -43,6 +46,7 @@ impl MergePrEffects for MergePRHandler {
             &req.strategy,
             &req.working_dir,
             self.git_wt.clone(),
+            self.github_client.as_deref(),
         )
         .await
         .effect_err("merge_pr")?;
@@ -118,7 +122,7 @@ mod tests {
     fn test_namespace() {
         let _ctx = test_ctx();
         let git_wt = Arc::new(GitWorktreeService::new(PathBuf::from(".")));
-        let handler = MergePRHandler::new(git_wt);
+        let handler = MergePRHandler::new(git_wt, None);
         assert_eq!(handler.namespace(), "merge_pr");
     }
 

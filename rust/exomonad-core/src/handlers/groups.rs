@@ -13,6 +13,7 @@ use crate::services::git_worktree::GitWorktreeService;
 use crate::services::github::GitHubService;
 use crate::services::mutex_registry::MutexRegistry;
 use crate::services::supervisor_registry::SupervisorRegistry;
+use crate::services::Services;
 use claude_teams_bridge::TeamRegistry;
 
 use super::{
@@ -43,16 +44,15 @@ pub fn core_handlers(
 /// Git and GitHub handlers for dev tooling.
 ///
 /// Includes: git, github, file_pr, merge_pr, copilot.
-/// `github` is optional — if None, GitHubHandler is not registered.
+/// GitHub client from `services` is optional — if None, GitHubHandler is not registered.
 pub fn git_handlers(
+    services: &Services,
     git: Arc<GitService>,
-    github: Option<GitHubService>,
     git_wt: Arc<GitWorktreeService>,
-    event_log: Option<Arc<EventLog>>,
 ) -> Vec<Box<dyn EffectHandler>> {
-    let mut file_pr_handler = FilePRHandler::new(git_wt.clone());
-    let mut merge_pr_handler = MergePRHandler::new(git_wt);
-    if let Some(ref log) = event_log {
+    let mut file_pr_handler = FilePRHandler::new(git_wt.clone(), services.github_client.clone());
+    let mut merge_pr_handler = MergePRHandler::new(git_wt, services.github_client.clone());
+    if let Some(ref log) = services.event_log {
         file_pr_handler = file_pr_handler.with_event_log(log.clone());
         merge_pr_handler = merge_pr_handler.with_event_log(log.clone());
     }
@@ -63,8 +63,10 @@ pub fn git_handlers(
         Box::new(merge_pr_handler),
         Box::new(CopilotHandler::new()),
     ];
-    if let Some(gh) = github {
-        handlers.push(Box::new(GitHubHandler::new(gh)));
+    if let Some(ref client) = services.github_client {
+        handlers.push(Box::new(GitHubHandler::new(GitHubService::new(
+            client.clone(),
+        ))));
     } else {
         tracing::warn!(
             "GitHub service not available; 'github' namespace handlers will not be registered."
@@ -123,6 +125,7 @@ pub fn orchestration_handlers(
 mod tests {
     use super::*;
     use crate::services::command::CommandExecutor;
+    use crate::services::GitHubClient;
     use std::future::Future;
     use std::pin::Pin;
     use tempfile::tempdir;
@@ -156,7 +159,11 @@ mod tests {
         let git = Arc::new(GitService::new(Arc::new(MockExecutor)));
         let git_wt = Arc::new(GitWorktreeService::new(tmp.path().to_path_buf()));
 
-        let handlers = git_handlers(git, None, git_wt, None);
+        let services = Services {
+            github_client: None,
+            event_log: None,
+        };
+        let handlers = git_handlers(&services, git, git_wt);
         assert_eq!(handlers.len(), 4);
         let namespaces: Vec<_> = handlers.iter().map(|h| h.namespace()).collect();
         assert!(namespaces.contains(&"git"));
@@ -171,9 +178,13 @@ mod tests {
         let tmp = tempdir().unwrap();
         let git = Arc::new(GitService::new(Arc::new(MockExecutor)));
         let git_wt = Arc::new(GitWorktreeService::new(tmp.path().to_path_buf()));
-        let github = GitHubService::new("test-token".to_string()).unwrap();
+        let client = GitHubClient::new(5);
 
-        let handlers = git_handlers(git, Some(github), git_wt, None);
+        let services = Services {
+            github_client: Some(client),
+            event_log: None,
+        };
+        let handlers = git_handlers(&services, git, git_wt);
         assert_eq!(handlers.len(), 5);
         let namespaces: Vec<_> = handlers.iter().map(|h| h.namespace()).collect();
         assert!(namespaces.contains(&"github"));

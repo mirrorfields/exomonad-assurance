@@ -515,34 +515,29 @@ impl TmuxIpc {
 
         // Submit with retry — TUIs may drop the first Enter keystroke
         // if still processing pasted text.
-        let mut last_err = None;
-        for attempt in 0..3 {
-            if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-            match Command::new("tmux")
-                .args(["send-keys", "-t", &qualified_target, "Enter"])
+        let enter_policy = crate::services::resilience::RetryPolicy::new(
+            3,
+            crate::services::resilience::Backoff::Linear {
+                initial: std::time::Duration::from_millis(200),
+            },
+        );
+        let qt = &qualified_target;
+        crate::services::resilience::retry(&enter_policy, || async {
+            let output = Command::new("tmux")
+                .args(["send-keys", "-t", qt, "Enter"])
                 .output()
                 .await
-            {
-                Ok(output) if output.status.success() => {
-                    last_err = None;
-                    break;
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    warn!(target = %qualified_target, attempt, "send-keys Enter failed: {}", stderr);
-                    last_err = Some(stderr);
-                }
-                Err(e) => {
-                    warn!(target = %qualified_target, attempt, "send-keys Enter error: {}", e);
-                    last_err = Some(e.to_string());
-                }
+                .context("Failed to run tmux send-keys")?;
+            if output.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                warn!(target = %qt, "send-keys Enter failed: {}", stderr);
+                anyhow::bail!("send-keys Enter failed: {}", stderr)
             }
-        }
-        if let Some(err) = last_err {
-            anyhow::bail!("send-keys Enter failed after 3 attempts: {}", err);
-        }
+        })
+        .await
+        .context("send-keys Enter failed after 3 attempts")?;
 
         // Wake the target pane's TUI event loop via SIGWINCH so it processes
         // the injected input. Non-fatal — input was already delivered.

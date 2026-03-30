@@ -3,12 +3,12 @@ use crate::plugin_manager::PluginManager;
 use crate::services::acp_registry::AcpRegistry;
 use crate::services::agent_control::AgentType;
 use crate::services::event_queue::EventQueue;
-use crate::services::github::{build_octocrab, map_octo_err};
+use crate::services::github::{map_octo_err, GitHubClient};
 use crate::services::repo;
 use anyhow::Result;
 use claude_teams_bridge::TeamRegistry;
 use exomonad_proto::effects::events::{event::EventType, AgentMessage, Event};
-use octocrab::{params, Octocrab};
+use octocrab::params;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,9 +30,7 @@ pub struct GitHubPoller {
     acp_registry: Option<Arc<AcpRegistry>>,
     plugins: Option<PluginMap>,
     event_log: Option<Arc<super::event_log::EventLog>>,
-    octo: Option<Octocrab>,
-    /// Number of consecutive failures before rebuilding the octocrab client.
-    rebuild_threshold: u32,
+    github: Option<Arc<GitHubClient>>,
 }
 
 /// A Copilot review comment with optional file context.
@@ -285,9 +283,13 @@ impl GitHubPoller {
             acp_registry: None,
             plugins: None,
             event_log: None,
-            octo: build_octocrab().ok(),
-            rebuild_threshold: 5,
+            github: None,
         }
+    }
+
+    pub fn with_github_client(mut self, client: Option<Arc<GitHubClient>>) -> Self {
+        self.github = client;
+        self
     }
 
     pub fn with_event_log(mut self, log: Arc<super::event_log::EventLog>) -> Self {
@@ -315,7 +317,7 @@ impl GitHubPoller {
         self
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(&self) {
         tracing::info!(
             poll_interval_secs = self.poll_interval.as_secs(),
             "GitHub poller started"
@@ -364,11 +366,9 @@ impl GitHubPoller {
                         );
                     }
 
-                    // Rebuild the octocrab client after sustained failures — the original
-                    // client may have been built with stale env vars or during a network blip.
-                    if consecutive_failures == self.rebuild_threshold {
-                        info!("Rebuilding octocrab client after {} consecutive failures", consecutive_failures);
-                        self.octo = build_octocrab().ok();
+                    // Report failure to GitHubClient for health tracking and rebuild.
+                    if let Some(ref client) = self.github {
+                        client.report_failure().await;
                     }
                 }
             }
@@ -573,12 +573,13 @@ impl GitHubPoller {
         }
 
         // 2. Fetch all open PRs
-        let octo = match &self.octo {
-            Some(o) => o,
+        let octo = match &self.github {
+            Some(client) => client.get().await.map_err(|e| {
+                tracing::warn!("GitHubPoller: no octocrab client: {}", e);
+                e
+            })?,
             None => {
-                tracing::warn!(
-                    "GitHubPoller: no octocrab client (GITHUB_TOKEN not set), skipping cycle"
-                );
+                tracing::warn!("GitHubPoller: no GitHub client configured, skipping cycle");
                 return Ok(());
             }
         };
@@ -863,8 +864,11 @@ impl GitHubPoller {
         repo: &str,
         pr_number: PRNumber,
     ) -> Result<(Vec<CopilotComment>, Vec<CopilotReview>)> {
-        let octo = match &self.octo {
-            Some(o) => o,
+        let octo = match &self.github {
+            Some(client) => match client.get().await {
+                Ok(c) => c,
+                Err(_) => return Ok((Vec::new(), Vec::new())),
+            },
             None => return Ok((Vec::new(), Vec::new())),
         };
 
@@ -922,8 +926,11 @@ impl GitHubPoller {
     }
 
     async fn fetch_ci_status(&self, owner: &str, repo: &str, sha: &str) -> Result<String> {
-        let octo = match &self.octo {
-            Some(o) => o,
+        let octo = match &self.github {
+            Some(client) => match client.get().await {
+                Ok(c) => c,
+                Err(_) => return Ok("unknown".to_string()),
+            },
             None => return Ok("unknown".to_string()),
         };
 

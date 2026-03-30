@@ -10,6 +10,7 @@ use crate::effects::{
 use crate::services::event_log::EventLog;
 use crate::services::file_pr::{self, FilePRInput};
 use crate::services::git_worktree::GitWorktreeService;
+use crate::services::GitHubClient;
 use async_trait::async_trait;
 use exomonad_proto::effects::file_pr::*;
 use std::sync::Arc;
@@ -21,13 +22,15 @@ use tracing::instrument;
 /// the generated `dispatch_file_pr_effect` function.
 pub struct FilePRHandler {
     git_wt: Arc<GitWorktreeService>,
+    github_client: Option<Arc<GitHubClient>>,
     event_log: Option<Arc<EventLog>>,
 }
 
 impl FilePRHandler {
-    pub fn new(git_wt: Arc<GitWorktreeService>) -> Self {
+    pub fn new(git_wt: Arc<GitWorktreeService>, github_client: Option<Arc<GitHubClient>>) -> Self {
         Self {
             git_wt,
+            github_client,
             event_log: None,
         }
     }
@@ -74,9 +77,10 @@ impl FilePrEffects for FilePRHandler {
             working_dir: Some(working_dir.to_string_lossy().to_string()),
         };
 
-        let output = file_pr::file_pr_async(&input, self.git_wt.clone())
-            .await
-            .effect_err("file_pr")?;
+        let output =
+            file_pr::file_pr_async(&input, self.git_wt.clone(), self.github_client.as_deref())
+                .await
+                .effect_err("file_pr")?;
 
         tracing::info!(
             pr_number = output.pr_number.as_u64(),
@@ -147,7 +151,7 @@ mod tests {
     #[test]
     fn test_namespace() {
         let git_wt = Arc::new(GitWorktreeService::new(PathBuf::from(".")));
-        let handler = FilePRHandler::new(git_wt);
+        let handler = FilePRHandler::new(git_wt, None);
         assert_eq!(handler.namespace(), "file_pr");
     }
 

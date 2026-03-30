@@ -5,7 +5,7 @@
 use crate::domain::{BranchName, PRNumber};
 use crate::services::git;
 use crate::services::git_worktree::GitWorktreeService;
-use crate::services::github::{build_octocrab, map_octo_err};
+use crate::services::github::{build_octocrab, map_octo_err, GitHubClient};
 use crate::services::repo;
 use anyhow::{Context, Result};
 use octocrab::params;
@@ -162,12 +162,18 @@ async fn create_pr(
 // ============================================================================
 
 /// File a PR using GitHub API. Pushes the branch, creates or updates the PR.
+///
+/// If `github` is provided, uses its managed client. Otherwise falls back to `build_octocrab()`.
 pub async fn file_pr_async(
     input: &FilePRInput,
     git_wt: Arc<GitWorktreeService>,
+    github: Option<&GitHubClient>,
 ) -> Result<FilePROutput> {
     let dir = input.working_dir.as_deref().unwrap_or(".");
-    let octo = build_octocrab()?;
+    let octo = match github {
+        Some(client) => client.get().await?,
+        None => build_octocrab()?,
+    };
     let repo_info = repo::get_repo_info(dir).await?;
 
     // Get branch from the agent's working directory, not server CWD
@@ -346,7 +352,7 @@ mod tests {
             working_dir: Some(temp_dir.path().to_string_lossy().to_string()),
         };
 
-        let result = file_pr_async(&input, git_wt).await;
+        let result = file_pr_async(&input, git_wt, None).await;
         assert!(result.is_err());
 
         Ok(())
@@ -402,7 +408,7 @@ mod tests {
         };
 
         // Without GITHUB_TOKEN or origin remote, this will fail early.
-        let result = file_pr_async(&input, git_wt).await;
+        let result = file_pr_async(&input, git_wt, None).await;
 
         if let Err(ref e) = result {
             let err_msg = e.to_string();

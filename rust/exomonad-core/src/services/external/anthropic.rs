@@ -117,12 +117,22 @@ impl ExternalService for AnthropicService {
                 code: 500,
                 message: format!("URL join failed: {}", e),
             })?;
-        let mut attempts = 0;
-        let max_attempts = 3;
-        let mut backoff = Duration::from_millis(500);
 
-        loop {
-            attempts += 1;
+        let policy = crate::services::resilience::RetryPolicy::filtered(
+            3,
+            crate::services::resilience::Backoff::Exponential {
+                initial: Duration::from_millis(500),
+                max: Duration::from_secs(2),
+            },
+            |e| {
+                // Only retry 529 (overloaded) errors
+                e.downcast_ref::<ServiceError>()
+                    .map(|se| matches!(se, ServiceError::RateLimited { .. }))
+                    .unwrap_or(false)
+            },
+        );
+
+        let result = crate::services::resilience::retry(&policy, || async {
             let response = self
                 .client
                 .post(url.clone())
@@ -131,18 +141,11 @@ impl ExternalService for AnthropicService {
                 .header("content-type", "application/json")
                 .json(&payload)
                 .send()
-                .await?;
+                .await
+                .map_err(ServiceError::from)?;
 
             if response.status().as_u16() == 529 {
-                if attempts >= max_attempts {
-                    return Err(ServiceError::RateLimited {
-                        retry_after_ms: backoff.as_millis() as u64,
-                    });
-                }
-                warn!("Anthropic overloaded (529), retrying in {:?}...", backoff);
-                tokio::time::sleep(backoff).await;
-                backoff *= 2;
-                continue;
+                return Err(ServiceError::RateLimited { retry_after_ms: 0 }.into());
             }
 
             if !response.status().is_success() {
@@ -151,25 +154,35 @@ impl ExternalService for AnthropicService {
                     warn!("Failed to read error response body: {}", e);
                     String::new()
                 });
-                return Err(ServiceError::Api { code, message });
+                return Err(ServiceError::Api { code, message }.into());
             }
 
-            let body: AnthropicResponsePayload = response.json().await?;
+            let body: AnthropicResponsePayload =
+                response.json().await.map_err(ServiceError::from)?;
 
             let stop_reason = match body.stop_reason.as_deref() {
                 Some("end_turn") => StopReason::EndTurn,
                 Some("max_tokens") => StopReason::MaxTokens,
                 Some("stop_sequence") => StopReason::StopSequence,
                 Some("tool_use") => StopReason::ToolUse,
-                _ => StopReason::EndTurn, // Default or unknown
+                _ => StopReason::EndTurn,
             };
 
-            return Ok(ServiceResponse::AnthropicChat {
+            Ok(ServiceResponse::AnthropicChat {
                 content: body.content,
                 stop_reason,
                 usage: body.usage,
-            });
-        }
+            })
+        })
+        .await;
+
+        result.map_err(|e| {
+            e.downcast::<ServiceError>()
+                .unwrap_or_else(|e| ServiceError::Api {
+                    code: 500,
+                    message: e.to_string(),
+                })
+        })
     }
 }
 

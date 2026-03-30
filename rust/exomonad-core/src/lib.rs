@@ -32,7 +32,7 @@
 //! let mut builder = RuntimeBuilder::new()
 //!     .with_wasm_path(wasm_path)
 //!     .with_handlers(core_handlers(project_dir.clone(), None))
-//!     .with_handlers(git_handlers(git, github, git_wt, None));
+//!     .with_handlers(git_handlers(&services, git, git_wt));
 //!
 //! // Add custom domain handlers
 //! builder = builder.with_effect_handler(MyDomainHandler::new());

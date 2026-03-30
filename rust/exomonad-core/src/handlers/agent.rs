@@ -205,7 +205,9 @@ impl AgentHandler {
         // so registering their birth_branch would cause deliver_to_agent to
         // write to the parent's inbox (wrong recipient) instead of falling
         // back to tmux (correct recipient).
-        team_reg.register(child_agent_name.as_str(), team_info.clone()).await;
+        team_reg
+            .register(child_agent_name.as_str(), team_info.clone())
+            .await;
 
         let slug = child_identity.slug();
         if slug != child_agent_name.as_str() {
@@ -591,7 +593,9 @@ impl AgentEffects for AgentHandler {
 
         // Generate MCP settings for the agent using stdio transport
         let agent_name = &req.name;
-        let context_path = self.service.resolve_role_context(&crate::domain::Role::worker());
+        let context_path = self
+            .service
+            .resolve_role_context(&crate::domain::Role::worker());
         let settings_json = AgentControlService::generate_gemini_worker_settings(
             agent_name,
             context_path.as_deref(),
@@ -830,8 +834,9 @@ impl AgentEffects for AgentHandler {
         // (synthetic members are always registered under internal_name).
         if closed {
             if let Some(ref team_reg) = self.team_registry {
-                let identity =
-                    crate::services::agent_control::AgentIdentity::from_internal_name(&resolved_internal_name);
+                let identity = crate::services::agent_control::AgentIdentity::from_internal_name(
+                    &resolved_internal_name,
+                );
                 let birth_branch_str = ctx.birth_branch.as_str();
                 let team_info = if let Some(info) = team_reg.get(&agent_key).await {
                     Some(info)

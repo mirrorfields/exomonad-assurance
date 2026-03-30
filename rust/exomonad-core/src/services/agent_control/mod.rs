@@ -27,7 +27,7 @@ pub(crate) use tracing::{debug, info, instrument, warn};
 
 pub(crate) use super::acp_registry::AcpRegistry;
 pub(crate) use super::git_worktree::GitWorktreeService;
-pub(crate) use super::github::{GitHubService, Repo};
+pub(crate) use super::github::{GitHubClient, GitHubService, Repo};
 pub(crate) use super::tmux_events;
 pub(crate) use super::tmux_ipc;
 pub(crate) use claude_teams_bridge::TeamRegistry;
@@ -542,8 +542,8 @@ pub struct AgentControlService {
     pub(crate) project_dir: PathBuf,
     /// Base directory for worktrees (default: .exo/worktrees)
     pub(crate) worktree_base: PathBuf,
-    /// GitHub service for fetching issues
-    pub(crate) github: Option<GitHubService>,
+    /// GitHub client for fetching issues
+    pub(crate) github: Option<Arc<GitHubClient>>,
     /// tmux session name for event emission
     pub(crate) tmux_session: Option<String>,
     /// Direct tmux IPC client.
@@ -568,7 +568,7 @@ impl AgentControlService {
     /// Create a new agent control service.
     pub fn new(
         project_dir: PathBuf,
-        github: Option<GitHubService>,
+        github: Option<Arc<GitHubClient>>,
         git_wt: Arc<GitWorktreeService>,
     ) -> Self {
         let worktree_base = project_dir.join(".exo/worktrees");
@@ -659,7 +659,10 @@ impl AgentControlService {
         agent_name: &AgentName,
         routing: RoutingInfo,
     ) -> Result<PathBuf> {
-        let agent_config_dir = self.project_dir.join(".exo/agents").join(agent_name.as_str());
+        let agent_config_dir = self
+            .project_dir
+            .join(".exo/agents")
+            .join(agent_name.as_str());
         fs::create_dir_all(&agent_config_dir).await?;
         routing.write_to_dir(&agent_config_dir).await?;
 
@@ -693,9 +696,7 @@ impl AgentControlService {
 
         // Try to load GitHub token from secrets
         let secrets = super::secrets::Secrets::load();
-        let github = secrets
-            .github_token()
-            .and_then(|t| GitHubService::new(t).ok());
+        let github = secrets.github_token().map(|_| GitHubClient::new(5));
 
         let git_wt = Arc::new(GitWorktreeService::new(project_dir.clone()));
 

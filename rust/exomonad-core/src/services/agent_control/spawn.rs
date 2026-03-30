@@ -25,11 +25,12 @@ impl AgentControlService {
             // Resolve effective project dir.
             let effective_project_dir = self.effective_project_dir(options.subrepo.as_deref())?;
 
-            // Get GitHub service
-            let github = self
+            // Get GitHub client
+            let github_client = self
                 .github
                 .as_ref()
                 .ok_or_else(|| anyhow!("GitHub service not available (GITHUB_TOKEN not set)"))?;
+            let github = GitHubService::new(github_client.clone());
 
             // Fetch issue from GitHub
             let issue_id = issue_number.as_u64().to_string();
@@ -42,7 +43,8 @@ impl AgentControlService {
 
             // Generate slug and agent identity
             let slug = slugify(&issue.title);
-            let identity = AgentIdentity::new(format!("gh-{}-{}", issue_id, slug), options.agent_type);
+            let identity =
+                AgentIdentity::new(format!("gh-{}-{}", issue_id, slug), options.agent_type);
             let agent_name = identity.internal_name();
 
             // Determine base branch (use birth_branch for root detection)

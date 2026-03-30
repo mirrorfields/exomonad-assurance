@@ -487,47 +487,37 @@ pub async fn deliver_to_agent(
         });
         if let Some(team_info) = resolved {
             // Retry inbox writes up to 3 times before falling back
-            let mut teams_result = None;
-            for attempt in 1..=3 {
-                match teams_mailbox::write_to_inbox(
-                    &team_info.team_name,
-                    &team_info.inbox_name,
-                    from,
-                    message,
-                    summary,
-                ) {
-                    Ok(timestamp) => {
-                        teams_result = Some(timestamp);
-                        break;
-                    }
-                    Err(e) => {
-                        if attempt < 3 {
-                            warn!(
-                                agent = %agent_key,
-                                attempt,
-                                error = %e,
-                                "Teams inbox write failed, retrying"
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        } else {
-                            warn!(
-                                agent = %agent_key,
-                                error = %e,
-                                "Teams inbox write failed after 3 attempts, falling back to ACP/tmux"
-                            );
-                            tracing::info!(
-                                otel.name = "message.delivery",
-                                agent_id = %from,
-                                recipient = %agent_key,
-                                method = "teams_inbox",
-                                outcome = "failed",
-                                detail = %e,
-                                "[event] message.delivery"
-                            );
-                        }
-                    }
+            let team_name_ref = &team_info.team_name;
+            let inbox_name_ref = &team_info.inbox_name;
+            let inbox_policy = super::resilience::RetryPolicy::new(
+                3,
+                super::resilience::Backoff::Fixed(std::time::Duration::from_millis(100)),
+            );
+            let teams_result = super::resilience::retry(&inbox_policy, || async {
+                teams_mailbox::write_to_inbox(team_name_ref, inbox_name_ref, from, message, summary)
+                    .map_err(|e| anyhow::anyhow!("{}", e))
+            })
+            .await;
+            let teams_result = match teams_result {
+                Ok(timestamp) => Some(timestamp),
+                Err(e) => {
+                    warn!(
+                        agent = %agent_key,
+                        error = %e,
+                        "Teams inbox write failed after 3 attempts, falling back to ACP/tmux"
+                    );
+                    tracing::info!(
+                        otel.name = "message.delivery",
+                        agent_id = %from,
+                        recipient = %agent_key,
+                        method = "teams_inbox",
+                        outcome = "failed",
+                        detail = %e,
+                        "[event] message.delivery"
+                    );
+                    None
                 }
-            }
+            };
 
             if let Some(timestamp) = teams_result {
                 tracing::Span::current().record("delivery_method", "teams");
@@ -568,8 +558,13 @@ pub async fn deliver_to_agent(
                 };
                 let pd = project_dir.join(worktree);
                 tokio::spawn(async move {
-                    for attempt in 1..=3 {
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    let verify_policy = crate::services::resilience::RetryPolicy::new(
+                        3,
+                        crate::services::resilience::Backoff::Fixed(
+                            std::time::Duration::from_secs(10),
+                        ),
+                    );
+                    let verified = crate::services::resilience::retry(&verify_policy, || {
                         let is_read =
                             teams_mailbox::is_message_read(&team_name, &inbox_name, &timestamp);
                         info!(
@@ -577,13 +572,20 @@ pub async fn deliver_to_agent(
                             team = %team_name,
                             inbox = %inbox_name,
                             timestamp = %timestamp,
-                            attempt,
                             is_read,
                             "Delivery verifier poll"
                         );
-                        if is_read {
-                            return;
+                        async move {
+                            if is_read {
+                                Ok(())
+                            } else {
+                                anyhow::bail!("message not yet read")
+                            }
                         }
+                    })
+                    .await;
+                    if verified.is_ok() {
+                        return;
                     }
                     if !has_tmux_fallback {
                         warn!(

@@ -10,7 +10,9 @@ impl AgentControlService {
         // Try to find agent in list (for metadata and window matching).
         // Failure here is non-fatal to allow cleaning up worker panes (invisible to list_agents).
         let agents = self.list_agents().await.unwrap_or_default();
-        let agent = agents.iter().find(|a| a.internal_name.as_str() == identifier);
+        let agent = agents
+            .iter()
+            .find(|a| a.internal_name.as_str() == identifier);
 
         info!(
             identifier,

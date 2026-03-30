@@ -1,6 +1,6 @@
 use crate::domain::PRNumber;
 use crate::services::git_worktree::GitWorktreeService;
-use crate::services::github::{build_octocrab, map_octo_err};
+use crate::services::github::{build_octocrab, map_octo_err, GitHubClient};
 use crate::services::repo;
 use anyhow::Result;
 use octocrab::params::pulls::MergeMethod;
@@ -17,11 +17,15 @@ pub struct MergePROutput {
     pub branch_name: String,
 }
 
+/// Merge a PR using GitHub API.
+///
+/// If `github` is provided, uses its managed client. Otherwise falls back to `build_octocrab()`.
 pub async fn merge_pr_async(
     pr_number: PRNumber,
     strategy: &str,
     working_dir: &str,
     git_wt: Arc<GitWorktreeService>,
+    github: Option<&GitHubClient>,
 ) -> Result<MergePROutput> {
     let dir = if working_dir.is_empty() {
         "."
@@ -41,7 +45,10 @@ pub async fn merge_pr_async(
         "Merging PR"
     );
 
-    let octo = build_octocrab()?;
+    let octo = match github {
+        Some(client) => client.get().await?,
+        None => build_octocrab()?,
+    };
     let repo_info = repo::get_repo_info(dir).await?;
 
     // Get branch name before merge to identify potential worktree
