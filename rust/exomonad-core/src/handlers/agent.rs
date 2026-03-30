@@ -119,7 +119,7 @@ impl AgentHandler {
     /// a hardcoded "exo-{branch}" team that CC doesn't recognize.
     async fn register_synthetic_member(
         &self,
-        member_name: &str,
+        member_name: &AgentName,
         agent_type: &str,
         ctx: &crate::effects::EffectContext,
     ) {
@@ -182,10 +182,11 @@ impl AgentHandler {
 
         // Derive the sub-TL's identity keys from the branch name
         let child_birth_branch = format!("{}.{}", ctx.birth_branch, child_branch);
-        let child_agent_name = format!(
-            "{}-claude",
-            crate::services::agent_control::slugify(child_branch)
+        let child_identity = crate::services::agent_control::AgentIdentity::new(
+            crate::services::agent_control::slugify(child_branch),
+            crate::services::agent_control::AgentType::Claude,
         );
+        let child_agent_name = child_identity.internal_name();
 
         info!(
             child_agent = %child_agent_name,
@@ -204,11 +205,11 @@ impl AgentHandler {
         // so registering their birth_branch would cause deliver_to_agent to
         // write to the parent's inbox (wrong recipient) instead of falling
         // back to tmux (correct recipient).
-        team_reg.register(&child_agent_name, team_info.clone()).await;
+        team_reg.register(child_agent_name.as_str(), team_info.clone()).await;
 
-        let slug = crate::services::agent_control::slugify(child_branch);
-        if slug != child_agent_name {
-            team_reg.register(&slug, team_info).await;
+        let slug = child_identity.slug();
+        if slug != child_agent_name.as_str() {
+            team_reg.register(slug, team_info).await;
         }
     }
 }
@@ -400,11 +401,11 @@ impl AgentEffects for AgentHandler {
 
         // Register as synthetic team member using internal_name (slug-gemini),
         // matching what notify_parent sends as `from`.
-        let internal_name = format!(
-            "{}-gemini",
-            crate::services::agent_control::slugify(&req.name)
+        let identity = crate::services::agent_control::AgentIdentity::new(
+            crate::services::agent_control::slugify(&req.name),
+            crate::services::agent_control::AgentType::Gemini,
         );
-        self.register_synthetic_member(&internal_name, "gemini-worker", ctx)
+        self.register_synthetic_member(&identity.internal_name(), "gemini-worker", ctx)
             .await;
         self.register_child_supervisor(&req.name, ctx).await;
 
@@ -455,7 +456,7 @@ impl AgentEffects for AgentHandler {
             task: req.task.clone(),
             branch_name: req.branch_name.clone(),
             parent_session_id,
-            role: non_empty(req.role.clone()),
+            role: non_empty(req.role.clone()).map(crate::domain::Role::new),
             agent_type: convert_agent_type(req.agent_type())?,
             claude_flags: claude_spawn_flags(
                 req.permission_mode.clone(),
@@ -502,11 +503,11 @@ impl AgentEffects for AgentHandler {
         self.register_child_supervisor(&req.branch_name, ctx).await;
 
         // Register sub-TL as synthetic member so it can receive Teams inbox messages
-        let child_agent_name = format!(
-            "{}-claude",
-            crate::services::agent_control::slugify(&req.branch_name)
+        let child_identity = crate::services::agent_control::AgentIdentity::new(
+            crate::services::agent_control::slugify(&req.branch_name),
+            crate::services::agent_control::AgentType::Claude,
         );
-        self.register_synthetic_member(&child_agent_name, "claude-subtree", ctx)
+        self.register_synthetic_member(&child_identity.internal_name(), "claude-subtree", ctx)
             .await;
 
         // Propagate parent's team to sub-TL's identity keys so the sub-TL can
@@ -526,7 +527,7 @@ impl AgentEffects for AgentHandler {
         let options = SpawnLeafOptions {
             task: req.task.clone(),
             branch_name: req.branch_name.clone(),
-            role: non_empty(req.role.clone()),
+            role: non_empty(req.role.clone()).map(crate::domain::Role::new),
             agent_type: convert_agent_type(req.agent_type())?,
             claude_flags: claude_spawn_flags(
                 req.permission_mode.clone(),
@@ -562,11 +563,11 @@ impl AgentEffects for AgentHandler {
 
         // Register as synthetic team member using internal_name (slug-gemini),
         // matching what notify_parent sends as `from`.
-        let internal_name = format!(
-            "{}-gemini",
-            crate::services::agent_control::slugify(&req.branch_name)
+        let leaf_identity = crate::services::agent_control::AgentIdentity::new(
+            crate::services::agent_control::slugify(&req.branch_name),
+            crate::services::agent_control::AgentType::Gemini,
         );
-        self.register_synthetic_member(&internal_name, "gemini-leaf", ctx)
+        self.register_synthetic_member(&leaf_identity.internal_name(), "gemini-leaf", ctx)
             .await;
         self.register_child_supervisor(&req.branch_name, ctx).await;
 
@@ -590,7 +591,7 @@ impl AgentEffects for AgentHandler {
 
         // Generate MCP settings for the agent using stdio transport
         let agent_name = &req.name;
-        let context_path = self.service.resolve_role_context("worker");
+        let context_path = self.service.resolve_role_context(&crate::domain::Role::worker());
         let settings_json = AgentControlService::generate_gemini_worker_settings(
             agent_name,
             context_path.as_deref(),
@@ -637,7 +638,8 @@ impl AgentEffects for AgentHandler {
         registry.register(agent_name.clone(), conn).await;
 
         // Register as synthetic team member (uses TL's actual team, not hardcoded exo-{branch})
-        self.register_synthetic_member(agent_name, "gemini-acp", ctx)
+        let member_name = AgentName::from(agent_name.as_str());
+        self.register_synthetic_member(&member_name, "gemini-acp", ctx)
             .await;
 
         info!(agent = %agent_name, "ACP agent spawned and registered");
@@ -773,11 +775,13 @@ impl AgentEffects for AgentHandler {
         );
 
         let mut routing = None;
+        let mut resolved_internal_name = agent_key.clone();
         for candidate in candidates {
             let path = agents_dir.join(&candidate).join("routing.json");
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                     info!(agent = %ctx.agent_name, path = %path.display(), "Found routing.json");
+                    resolved_internal_name = candidate;
                     routing = Some(parsed);
                     break;
                 }
@@ -821,6 +825,36 @@ impl AgentEffects for AgentHandler {
             warn!(agent = %ctx.agent_name, "Could not read routing.json (tried {agent_key} and suffixed variants)");
         }
 
+        // Remove synthetic team member registration after closing.
+        // Parse agent_key into AgentIdentity to get the correct internal_name
+        // (synthetic members are always registered under internal_name).
+        if closed {
+            if let Some(ref team_reg) = self.team_registry {
+                let identity =
+                    crate::services::agent_control::AgentIdentity::from_internal_name(&resolved_internal_name);
+                let birth_branch_str = ctx.birth_branch.as_str();
+                let team_info = if let Some(info) = team_reg.get(&agent_key).await {
+                    Some(info)
+                } else if let Some(info) = team_reg.get(birth_branch_str).await {
+                    Some(info)
+                } else if let Some(parent) = ctx.birth_branch.parent() {
+                    team_reg.get(parent.as_str()).await
+                } else {
+                    None
+                };
+                let member_name = identity.internal_name();
+                if let Some(info) = team_info {
+                    let team_name = TeamName::from(info.team_name.as_str());
+                    if let Err(e) = crate::services::synthetic_members::remove_synthetic_member(
+                        &team_name,
+                        &member_name,
+                    ) {
+                        warn!(team = %team_name, member = %member_name, error = %e, "Failed to remove synthetic member on close_self (non-fatal)");
+                    }
+                }
+            }
+        }
+
         info!(agent = %ctx.agent_name, closed, "Agent requested self-closure");
 
         Ok(CloseSelfResponse {
@@ -844,7 +878,7 @@ fn spawn_result_to_proto(
         agent_type: service_agent_type_to_proto(result.agent_type),
         role: 0,
         alive: true,
-        mux_window: result.tab_name.clone(),
+        mux_window: result.agent_name.to_string(),
         error: String::new(),
         pr_number: 0,
         pr_url: String::new(),
@@ -859,7 +893,7 @@ fn teammate_result_to_proto(
     use crate::services::agent_control::Topology;
 
     exomonad_proto::effects::agent::AgentInfo {
-        id: result.tab_name.clone(),
+        id: result.agent_name.to_string(),
         issue: String::new(),
         worktree_path: String::new(),
         branch_name: String::new(),
@@ -881,7 +915,7 @@ fn worker_result_to_proto(
     use crate::services::agent_control::Topology;
 
     exomonad_proto::effects::agent::AgentInfo {
-        id: result.tab_name.clone(),
+        id: result.agent_name.to_string(),
         issue: String::new(),
         worktree_path: String::new(),
         branch_name: String::new(),
@@ -903,7 +937,7 @@ fn subtree_result_to_proto(
     use crate::services::agent_control::Topology;
 
     exomonad_proto::effects::agent::AgentInfo {
-        id: result.tab_name.clone(),
+        id: result.agent_name.to_string(),
         issue: String::new(),
         worktree_path: result.agent_dir.display().to_string(),
         branch_name: branch_name.to_string(),
@@ -925,7 +959,7 @@ fn leaf_subtree_result_to_proto(
     use crate::services::agent_control::Topology;
 
     exomonad_proto::effects::agent::AgentInfo {
-        id: result.tab_name.clone(),
+        id: result.agent_name.to_string(),
         issue: String::new(),
         worktree_path: result.agent_dir.display().to_string(),
         branch_name: branch_name.to_string(),
@@ -959,8 +993,8 @@ fn service_info_to_proto(info: &AgentInfo) -> exomonad_proto::effects::agent::Ag
     };
 
     exomonad_proto::effects::agent::AgentInfo {
-        id: info.issue_id.clone(),
-        issue: info.issue_id.clone(),
+        id: info.internal_name.to_string(),
+        issue: info.internal_name.to_string(),
         worktree_path: info
             .agent_dir
             .as_ref()

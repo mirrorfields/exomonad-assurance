@@ -82,14 +82,14 @@ impl AgentControlService {
     /// Build the common env vars shared by all spawn functions.
     pub(crate) fn common_spawn_env(
         &self,
-        internal_name: &str,
+        agent_name: &AgentName,
         session_id: &str,
-        role: &str,
+        role: &crate::domain::Role,
     ) -> HashMap<String, String> {
         let mut env_vars = HashMap::new();
-        env_vars.insert("EXOMONAD_AGENT_ID".to_string(), internal_name.to_string());
+        env_vars.insert("EXOMONAD_AGENT_ID".to_string(), agent_name.to_string());
         env_vars.insert("EXOMONAD_SESSION_ID".to_string(), session_id.to_string());
-        env_vars.insert("EXOMONAD_ROLE".to_string(), role.to_string());
+        env_vars.insert("EXOMONAD_ROLE".to_string(), role.as_str().to_string());
         if let Some(ref session) = self.tmux_session {
             env_vars.insert("EXOMONAD_TMUX_SESSION".to_string(), session.clone());
         }
@@ -120,9 +120,9 @@ impl AgentControlService {
     }
 
     /// Emit an agent:started event if tmux_session is configured.
-    pub(crate) fn emit_agent_started(&self, internal_name: &str) -> Result<()> {
+    pub(crate) fn emit_agent_started(&self, agent_name: &AgentName) -> Result<()> {
         if let Some(ref session) = self.tmux_session {
-            let agent_id = crate::ui_protocol::AgentId::try_from(internal_name.to_string())
+            let agent_id = crate::ui_protocol::AgentId::try_from(agent_name.to_string())
                 .map_err(|e| anyhow!("Invalid agent_id: {}", e))?;
             let event = crate::ui_protocol::AgentEvent::AgentStarted {
                 agent_id,
@@ -468,7 +468,7 @@ impl AgentControlService {
         _effective_dir: &Path,
         agent_dir: &Path,
         agent_type: AgentType,
-        role: &str,
+        role: &crate::domain::Role,
     ) -> Result<()> {
         let agent_name = agent_dir
             .file_name()
@@ -478,7 +478,7 @@ impl AgentControlService {
         let mcp_content = Self::generate_mcp_config(
             agent_name,
             agent_type,
-            role,
+            role.as_str(),
             &self.wasm_name,
             &self.extra_mcp_servers,
         );
@@ -486,20 +486,20 @@ impl AgentControlService {
         match agent_type {
             AgentType::Claude => {
                 fs::write(agent_dir.join(".mcp.json"), mcp_content).await?;
-                info!(agent_dir = %agent_dir.display(), role = %role, "Wrote .mcp.json for Claude agent");
+                info!(agent_dir = %agent_dir.display(), role = %role.as_str(), "Wrote .mcp.json for Claude agent");
             }
             AgentType::Gemini => {
                 let gemini_dir = agent_dir.join(".gemini");
                 fs::create_dir_all(&gemini_dir).await?;
                 fs::write(gemini_dir.join("settings.json"), mcp_content).await?;
-                info!(agent_dir = %agent_dir.display(), role = %role, "Wrote .gemini/settings.json for Gemini agent");
+                info!(agent_dir = %agent_dir.display(), role = %role.as_str(), "Wrote .gemini/settings.json for Gemini agent");
             }
             AgentType::Process => {} // No MCP config for process companions
             AgentType::Shoal => {
                 let exo_dir = agent_dir.join(".exo");
                 fs::create_dir_all(&exo_dir).await?;
                 fs::write(exo_dir.join("mcp.json"), mcp_content).await?;
-                info!(agent_dir = %agent_dir.display(), role = %role, "Wrote .exo/mcp.json for Shoal agent");
+                info!(agent_dir = %agent_dir.display(), role = %role.as_str(), "Wrote .exo/mcp.json for Shoal agent");
             }
         }
         Ok(())
@@ -598,8 +598,8 @@ impl AgentControlService {
     }
 
     /// Resolve role context file with two-tier fallback: project-local > global.
-    pub(crate) fn resolve_role_context(&self, role: &str) -> Option<PathBuf> {
-        resolve_role_context_path(&self.project_dir, &self.wasm_name, role)
+    pub(crate) fn resolve_role_context(&self, role: &crate::domain::Role) -> Option<PathBuf> {
+        resolve_role_context_path(&self.project_dir, &self.wasm_name, role.as_str())
     }
 
     /// Generate MCP configuration JSON for an agent using stdio transport.

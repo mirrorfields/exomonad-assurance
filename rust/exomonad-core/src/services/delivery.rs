@@ -17,28 +17,55 @@ pub enum DeliveryResult {
     Failed,
 }
 
+/// Notification status for parent-facing messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyStatus {
+    Success,
+    Failure,
+}
+
+impl NotifyStatus {
+    /// Parse from proto/wire string ("failure" → Failure, anything else → Success).
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "failure" => NotifyStatus::Failure,
+            _ => NotifyStatus::Success,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            NotifyStatus::Success => "success",
+            NotifyStatus::Failure => "failure",
+        }
+    }
+}
+
+impl std::fmt::Display for NotifyStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Format a parent-facing notification message.
-/// "failure" → `[FAILED: {id}] {msg}`, otherwise → `[from: {id}] {msg}`.
-pub fn format_parent_notification(agent_id: &str, status: &str, message: &str) -> String {
+/// Failure → `[FAILED: {id}] {msg}`, otherwise → `[from: {id}] {msg}`.
+pub fn format_parent_notification(
+    agent_id: &crate::domain::AgentName,
+    status: NotifyStatus,
+    message: &str,
+) -> String {
+    let default_msg = match status {
+        NotifyStatus::Failure => "Task failed.",
+        NotifyStatus::Success => "Status update.",
+    };
+    let msg = if message.is_empty() {
+        default_msg
+    } else {
+        message
+    };
     match status {
-        "failure" => format!(
-            "[FAILED: {}] {}",
-            agent_id,
-            if message.is_empty() {
-                "Task failed."
-            } else {
-                message
-            }
-        ),
-        _ => format!(
-            "[from: {}] {}",
-            agent_id,
-            if message.is_empty() {
-                "Status update."
-            } else {
-                message
-            }
-        ),
+        NotifyStatus::Failure => format!("[FAILED: {}] {}", agent_id, msg),
+        NotifyStatus::Success => format!("[from: {}] {}", agent_id, msg),
     }
 }
 
@@ -136,8 +163,8 @@ pub async fn route_message(
 ) -> DeliveryOutcome {
     match address {
         Address::Agent(name) => {
+            let tab_name = resolve_tab_name_for_agent(name);
             let agent_key = name.as_str();
-            let tab_name = resolve_tab_name_for_agent(agent_key);
             let result = deliver_to_agent(
                 team_registry,
                 acp_registry,
@@ -154,8 +181,8 @@ pub async fn route_message(
         Address::Team { team, member } => {
             if let Some(member_name) = member {
                 // Direct team member delivery
+                let tab_name = resolve_tab_name_for_agent(member_name);
                 let agent_key = member_name.as_str();
-                let tab_name = resolve_tab_name_for_agent(agent_key);
                 let result = deliver_to_agent(
                     team_registry,
                     acp_registry,
@@ -229,7 +256,8 @@ async fn resolve_and_deliver_to_lead(
         "Resolved team lead for delivery"
     );
 
-    let tab_name = resolve_tab_name_for_agent(&lead_key);
+    let lead_agent = crate::domain::AgentName::from(lead_key.as_str());
+    let tab_name = resolve_tab_name_for_agent(&lead_agent);
     let result = deliver_to_agent(
         team_registry,
         acp_registry,
@@ -264,12 +292,12 @@ fn delivery_method_from_result(result: DeliveryResult) -> DeliveryMethod {
     }
 }
 
-pub fn resolve_tab_name_for_agent(agent_key: &str) -> String {
-    if agent_key == "root" {
+pub fn resolve_tab_name_for_agent(agent_key: &crate::domain::AgentName) -> String {
+    if agent_key.as_str() == "root" {
         "TL".to_string()
     } else {
-        crate::services::agent_control::AgentType::from_dir_name(agent_key)
-            .tab_display_name(agent_key)
+        crate::services::agent_control::AgentType::from_dir_name(agent_key.as_str())
+            .tab_display_name(agent_key.as_str())
     }
 }
 
@@ -292,10 +320,10 @@ pub async fn notify_parent_delivery(
     event_log: Option<&super::event_log::EventLog>,
     event_queue: &EventQueue,
     project_dir: &std::path::Path,
-    agent_id: &str,
+    agent_id: &crate::domain::AgentName,
     parent_session_id: &str,
     parent_tab_name: &str,
-    status: &str,
+    status: NotifyStatus,
     message: &str,
     summary: Option<&str>,
     source: &str,
@@ -311,10 +339,10 @@ pub async fn notify_parent_delivery(
     if let Some(log) = event_log {
         let _ = log.append(
             "agent.notify_parent",
-            agent_id,
+            agent_id.as_str(),
             &serde_json::json!({
                 "parent": parent_session_id,
-                "status": status,
+                "status": status.as_str(),
                 "message": message,
                 "source": source,
             }),
@@ -344,7 +372,7 @@ pub async fn notify_parent_delivery(
         project_dir,
         parent_session_id,
         parent_tab_name,
-        agent_id,
+        agent_id.as_str(),
         &notification,
         summary,
     )
@@ -780,31 +808,36 @@ mod tests {
 
     #[test]
     fn test_format_parent_notification_success() {
-        let msg = format_parent_notification("agent-1", "success", "All done");
+        let id = crate::domain::AgentName::from("agent-1");
+        let msg = format_parent_notification(&id, NotifyStatus::Success, "All done");
         assert_eq!(msg, "[from: agent-1] All done");
     }
 
     #[test]
     fn test_format_parent_notification_success_empty() {
-        let msg = format_parent_notification("agent-1", "success", "");
+        let id = crate::domain::AgentName::from("agent-1");
+        let msg = format_parent_notification(&id, NotifyStatus::Success, "");
         assert_eq!(msg, "[from: agent-1] Status update.");
     }
 
     #[test]
     fn test_format_parent_notification_failure() {
-        let msg = format_parent_notification("agent-2", "failure", "Something went wrong");
+        let id = crate::domain::AgentName::from("agent-2");
+        let msg = format_parent_notification(&id, NotifyStatus::Failure, "Something went wrong");
         assert_eq!(msg, "[FAILED: agent-2] Something went wrong");
     }
 
     #[test]
     fn test_format_parent_notification_failure_empty() {
-        let msg = format_parent_notification("agent-2", "failure", "");
+        let id = crate::domain::AgentName::from("agent-2");
+        let msg = format_parent_notification(&id, NotifyStatus::Failure, "");
         assert_eq!(msg, "[FAILED: agent-2] Task failed.");
     }
 
     #[test]
     fn test_format_parent_notification_other_status() {
-        let msg = format_parent_notification("agent-3", "running", "Working...");
+        let id = crate::domain::AgentName::from("agent-3");
+        let msg = format_parent_notification(&id, NotifyStatus::from_str("running"), "Working...");
         assert_eq!(msg, "[from: agent-3] Working...");
     }
 

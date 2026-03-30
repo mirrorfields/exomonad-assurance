@@ -80,7 +80,7 @@ PHASE 1 — spawn TWO children in parallel:
    name: 'beta'
    task: 'Edit src/beta.py to contain two functions: double(n) that returns n times 2, and triple(n) that returns n times 3. Commit with message "feat: beta module", push, file PR.'
 
-After spawning BOTH, IDLE and wait for notifications. When you receive [FIXES PUSHED] or [REVIEW TIMEOUT], merge with merge_pr."
+After spawning BOTH, IDLE and wait for notifications. When you receive [FIXES PUSHED] or [PR READY], merge with merge_pr."
 
 #### Step 1.2: Observe execution
 
@@ -106,25 +106,29 @@ Expected PRs (not necessarily in order):
 - main.alpha (from alpha sub-TL, targeting main)
 - main.beta (from Gemini leaf, targeting main)
 
-#### Step 2.3: Post CHANGES_REQUESTED on the leaf PR
+#### Step 2.3: Post reviews on both PRs
 
-Once the beta PR appears, use `post_review`:
+Once both PRs appear, post `CHANGES_REQUESTED` reviews on each:
 
+**Beta PR:**
 ```
 post_review(pr_number=<beta_pr>, state="CHANGES_REQUESTED", body="Add a docstring to each function describing what it does.")
 ```
 
-This tests the review cycle: poller detects review → injects into Gemini pane → Gemini fixes → pushes → poller fires fixes_pushed → root notified.
+**Alpha PR:**
+```
+post_review(pr_number=<alpha_pr>, state="CHANGES_REQUESTED", body="Add a docstring to each function describing what it does.")
+```
 
-Let the alpha PR go through the timeout path.
+This tests the full review cycle on both PRs: poller detects review → injects into agent pane → agent fixes → pushes → poller fires fixes_pushed → root notified.
 
 #### Step 2.4: Wait for merges
 
 Poll `$MOCK_LOG` every 15 seconds for `PUT .*/merge` entries. Max wait: 5 minutes.
 
-Expected merges:
-1. Root merges alpha PR (via [REVIEW TIMEOUT])
-2. Root merges beta PR (via [FIXES PUSHED] after addressing review)
+Expected merges (both via [FIXES PUSHED]):
+1. Root merges alpha PR (after alpha sub-TL addresses review + pushes fixes)
+2. Root merges beta PR (after Gemini leaf addresses review + pushes fixes)
 
 ---
 
@@ -146,8 +150,9 @@ Call `notify_parent` with:
   - alpha: Worker pane observed (write-alpha)?
   - beta: Gemini leaf activity?
   - Total PRs created (expected: 2)
-  - Review cycle: CHANGES_REQUESTED posted? Agent pushed fixes? [FIXES PUSHED] delivered?
-  - Merges: which PRs merged via which path (fixes_pushed / review_timeout)?
+  - alpha review cycle: CHANGES_REQUESTED posted? Sub-TL pushed fixes? [FIXES PUSHED] delivered?
+  - beta review cycle: CHANGES_REQUESTED posted? Gemini pushed fixes? [FIXES PUSHED] delivered?
+  - Merges: both PRs merged via [FIXES PUSHED]?
 
   **Overall:** Total agents spawned, total PRs, total merges, failures.
 

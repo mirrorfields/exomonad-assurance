@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 type PluginMap = Arc<RwLock<HashMap<crate::AgentName, Arc<PluginManager>>>>;
 
@@ -31,6 +31,8 @@ pub struct GitHubPoller {
     plugins: Option<PluginMap>,
     event_log: Option<Arc<super::event_log::EventLog>>,
     octo: Option<Octocrab>,
+    /// Number of consecutive failures before rebuilding the octocrab client.
+    rebuild_threshold: u32,
 }
 
 /// A Copilot review comment with optional file context.
@@ -284,6 +286,7 @@ impl GitHubPoller {
             plugins: None,
             event_log: None,
             octo: build_octocrab().ok(),
+            rebuild_threshold: 5,
         }
     }
 
@@ -312,7 +315,7 @@ impl GitHubPoller {
         self
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         tracing::info!(
             poll_interval_secs = self.poll_interval.as_secs(),
             "GitHub poller started"
@@ -344,17 +347,29 @@ impl GitHubPoller {
                 }
                 Err(e) => {
                     consecutive_failures += 1;
-                    let next_retry_secs = if consecutive_failures == 0 {
-                        base_interval.as_secs()
-                    } else {
+                    let next_retry_secs = {
                         let backoff =
                             base_interval * 2u32.saturating_pow(consecutive_failures.min(6));
                         backoff.min(max_backoff).as_secs()
                     };
-                    warn!(
-                        consecutive_failures,
-                        next_retry_secs, "GitHub poller cycle failed: {}", e
-                    );
+                    if consecutive_failures <= 3 {
+                        warn!(
+                            consecutive_failures,
+                            next_retry_secs, "GitHub poller cycle failed: {}", e
+                        );
+                    } else {
+                        debug!(
+                            consecutive_failures,
+                            next_retry_secs, "GitHub poller cycle failed: {}", e
+                        );
+                    }
+
+                    // Rebuild the octocrab client after sustained failures — the original
+                    // client may have been built with stale env vars or during a network blip.
+                    if consecutive_failures == self.rebuild_threshold {
+                        info!("Rebuilding octocrab client after {} consecutive failures", consecutive_failures);
+                        self.octo = build_octocrab().ok();
+                    }
                 }
             }
         }
@@ -517,16 +532,17 @@ impl GitHubPoller {
                 };
 
                 let summary = format!("Auto-notify: PR #{}", pr_num);
+                let agent_name = crate::domain::AgentName::from(agent_slug);
                 crate::services::delivery::notify_parent_delivery(
                     self.team_registry.as_deref(),
                     self.acp_registry.as_deref(),
                     self.event_log.as_deref(),
                     &self.event_queue,
                     &self.project_dir,
-                    agent_slug,
+                    &agent_name,
                     &parent_session_id,
                     &parent_tab,
-                    "success",
+                    crate::services::delivery::NotifyStatus::Success,
                     &message,
                     Some(&summary),
                     "event_handler",

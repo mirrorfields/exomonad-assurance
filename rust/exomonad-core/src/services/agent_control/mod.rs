@@ -9,7 +9,6 @@ mod cleanup;
 mod internal;
 mod spawn;
 
-pub(crate) use super::tmux_ipc::PaneId;
 pub(crate) use crate::common::TimeoutError;
 pub(crate) use crate::domain::{
     AgentName, AgentPermissions, BirthBranch, ClaudeSessionUuid, ItemState, RoutingInfo, TeamName,
@@ -31,6 +30,7 @@ pub(crate) use super::git_worktree::GitWorktreeService;
 pub(crate) use super::github::{GitHubService, Repo};
 pub(crate) use super::tmux_events;
 pub(crate) use super::tmux_ipc;
+pub(crate) use claude_teams_bridge::TeamRegistry;
 pub(crate) use std::sync::Arc;
 
 pub(crate) const SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
@@ -65,6 +65,65 @@ pub(crate) async fn ensure_branch_pushed(
 // ============================================================================
 // Types
 // ============================================================================
+
+/// Pairs a bare slug with its agent type, providing named accessors for all
+/// derived naming forms. Construct at the boundary (from proto fields, dir names,
+/// MCP args), then thread through code as a typed value.
+///
+/// # Naming concepts
+/// - **slug**: Bare human-readable identifier (`"feature-a"`)
+/// - **internal_name**: Suffixed directory/identity name as `AgentName` (`"feature-a-claude"`)
+/// - **display_name**: tmux window name (`"🤖 feature-a"`)
+///
+/// `internal_name()` returns `AgentName` (a validated newtype), not `String`.
+/// This makes it impossible to accidentally pass a bare slug where an internal
+/// name is expected — the type system catches it.
+#[derive(Debug, Clone)]
+pub struct AgentIdentity {
+    slug: String,
+    agent_type: AgentType,
+}
+
+impl AgentIdentity {
+    /// Construct from a bare slug and agent type.
+    pub fn new(slug: String, agent_type: AgentType) -> Self {
+        Self { slug, agent_type }
+    }
+
+    /// Parse from an internal name (e.g., `"feature-a-claude"` → slug=`"feature-a"`, type=Claude).
+    /// Falls back to Gemini if no known suffix is found.
+    pub fn from_internal_name(name: &str) -> Self {
+        let agent_type = AgentType::from_dir_name(name);
+        let suffix = format!("-{}", agent_type.suffix());
+        let slug = name.strip_suffix(&suffix).unwrap_or(name).to_string();
+        Self { slug, agent_type }
+    }
+
+    /// Bare slug without type suffix.
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+
+    /// Agent type.
+    pub fn agent_type(&self) -> AgentType {
+        self.agent_type
+    }
+
+    /// Suffixed directory/identity name as a validated `AgentName`.
+    ///
+    /// Used for: worktree dirs, agent config dirs, synthetic member names,
+    /// MCP --name flag, EXOMONAD_AGENT_ID env var.
+    pub fn internal_name(&self) -> AgentName {
+        // Safe: slug is non-empty (validated at construction) and suffix is non-empty,
+        // so the formatted string is always non-empty.
+        AgentName::from(format!("{}-{}", self.slug, self.agent_type.suffix()).as_str())
+    }
+
+    /// tmux window display name (e.g., `"🤖 feature-a"`).
+    pub fn display_name(&self) -> String {
+        format!("{} {}", self.agent_type.emoji(), self.slug)
+    }
+}
 
 /// Agent type for spawned agents.
 ///
@@ -337,7 +396,7 @@ pub struct SpawnSubtreeOptions {
     /// Parent Claude session ID for --resume --fork-session context inheritance.
     pub parent_session_id: Option<ClaudeSessionUuid>,
     /// Optional role override.
-    pub role: Option<String>,
+    pub role: Option<crate::domain::Role>,
     /// Agent type (claude or gemini). Required — no default.
     pub agent_type: AgentType,
     /// Claude-specific permission flags (ignored for Gemini).
@@ -361,7 +420,7 @@ pub struct SpawnLeafOptions {
     /// Branch name suffix.
     pub branch_name: String,
     /// Optional role override.
-    pub role: Option<String>,
+    pub role: Option<crate::domain::Role>,
     /// Agent type (claude or gemini). Required — no default.
     pub agent_type: AgentType,
     /// Claude-specific permission flags (ignored for Gemini).
@@ -378,8 +437,9 @@ pub struct SpawnLeafOptions {
 pub struct SpawnResult {
     /// Path to the agent directory (.exo/agents/{agent_id}/)
     pub agent_dir: PathBuf,
-    /// tmux window name
-    pub tab_name: String,
+    /// Agent's internal name (suffixed, e.g., "feature-a-claude").
+    /// Typed as `AgentName` to prevent confusion with bare slugs.
+    pub agent_name: AgentName,
     /// Issue title
     pub issue_title: String,
     /// Agent type
@@ -430,8 +490,8 @@ impl Topology {
 /// Information about an active agent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentInfo {
-    /// Issue ID (e.g., "123")
-    pub issue_id: String,
+    /// Internal name for the agent (e.g., "feature-a-claude").
+    pub internal_name: AgentName,
     /// Whether a tmux window/pane exists for this agent.
     pub has_tab: bool,
     /// Workspace topology.
@@ -494,6 +554,8 @@ pub struct AgentControlService {
     pub(crate) git_wt: Arc<GitWorktreeService>,
     /// ACP connection registry for Gemini agents.
     pub(crate) acp_registry: Option<Arc<AcpRegistry>>,
+    /// Team registry for resolving agent team membership.
+    pub(crate) team_registry: Option<Arc<TeamRegistry>>,
     /// When true, spawned Gemini agents receive `--yolo` flag.
     pub(crate) yolo: bool,
     /// WASM name for role context resolution (default: "devswarm").
@@ -519,6 +581,7 @@ impl AgentControlService {
             birth_branch: BirthBranch::from("unset"),
             git_wt,
             acp_registry: None,
+            team_registry: None,
             yolo: false,
             wasm_name: "devswarm".to_string(),
             extra_mcp_servers: HashMap::new(),
@@ -540,6 +603,12 @@ impl AgentControlService {
     /// Set the ACP registry.
     pub fn with_acp_registry(mut self, registry: Arc<AcpRegistry>) -> Self {
         self.acp_registry = Some(registry);
+        self
+    }
+
+    /// Set the team registry for resolving agent team membership during cleanup.
+    pub fn with_team_registry(mut self, registry: Arc<TeamRegistry>) -> Self {
+        self.team_registry = Some(registry);
         self
     }
 
@@ -587,10 +656,10 @@ impl AgentControlService {
     /// Creates the agent's config directory and writes the routing info.
     pub(crate) async fn finalize_spawn(
         &self,
-        internal_name: &str,
+        agent_name: &AgentName,
         routing: RoutingInfo,
     ) -> Result<PathBuf> {
-        let agent_config_dir = self.project_dir.join(".exo/agents").join(internal_name);
+        let agent_config_dir = self.project_dir.join(".exo/agents").join(agent_name.as_str());
         fs::create_dir_all(&agent_config_dir).await?;
         routing.write_to_dir(&agent_config_dir).await?;
 
@@ -639,6 +708,7 @@ impl AgentControlService {
             birth_branch: BirthBranch::root()?,
             git_wt,
             acp_registry: None,
+            team_registry: None,
             yolo: false,
             wasm_name: "devswarm".to_string(),
             extra_mcp_servers: HashMap::new(),

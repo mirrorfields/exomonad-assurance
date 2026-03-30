@@ -666,29 +666,32 @@ pub struct AgentPermissions {
 }
 
 /// Typed routing configuration for agent message delivery and cleanup.
+///
+/// `window_id` and `pane_id` use validated tmux types (`WindowId`/@N, `PaneId`/%N).
+/// `parent_tab` is a display name string (not a validated ID).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RoutingInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub window_id: Option<String>,
+    pub window_id: Option<crate::services::tmux_ipc::WindowId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
+    pub pane_id: Option<crate::services::tmux_ipc::PaneId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_tab: Option<String>,
 }
 
 impl RoutingInfo {
-    pub fn window(window_id: &str) -> Self {
+    pub fn window(window_id: crate::services::tmux_ipc::WindowId) -> Self {
         Self {
-            window_id: Some(window_id.to_string()),
+            window_id: Some(window_id),
             pane_id: None,
             parent_tab: None,
         }
     }
 
-    pub fn pane(pane_id: &str, parent_tab: &str) -> Self {
+    pub fn pane(pane_id: crate::services::tmux_ipc::PaneId, parent_tab: &str) -> Self {
         Self {
             window_id: None,
-            pane_id: Some(pane_id.to_string()),
+            pane_id: Some(pane_id),
             parent_tab: Some(parent_tab.to_string()),
         }
     }
@@ -929,9 +932,12 @@ mod tests {
 
     #[test]
     fn test_routing_info_serde() {
+        use crate::services::tmux_ipc::{PaneId, WindowId};
+
         // Window routing
-        let routing = RoutingInfo::window("@123");
-        assert_eq!(routing.window_id.as_deref(), Some("@123"));
+        let wid = WindowId::parse("@123").unwrap();
+        let routing = RoutingInfo::window(wid);
+        assert_eq!(routing.window_id.as_ref().unwrap().as_str(), "@123");
         assert_eq!(routing.pane_id, None);
         assert_eq!(routing.parent_tab, None);
 
@@ -939,10 +945,15 @@ mod tests {
         assert!(json.contains("\"window_id\":\"@123\""));
         assert!(!json.contains("\"pane_id\""));
 
+        // Roundtrip deserialization
+        let deserialized: RoutingInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.window_id.as_ref().unwrap().as_str(), "@123");
+
         // Pane routing
-        let routing = RoutingInfo::pane("%456", "main-claude");
+        let pid = PaneId::parse("%456").unwrap();
+        let routing = RoutingInfo::pane(pid, "main-claude");
         assert_eq!(routing.window_id, None);
-        assert_eq!(routing.pane_id.as_deref(), Some("%456"));
+        assert_eq!(routing.pane_id.as_ref().unwrap().as_str(), "%456");
         assert_eq!(routing.parent_tab.as_deref(), Some("main-claude"));
 
         let json = serde_json::to_string(&routing).unwrap();

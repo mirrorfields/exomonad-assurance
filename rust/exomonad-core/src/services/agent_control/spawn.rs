@@ -40,10 +40,10 @@ impl AgentControlService {
             };
             let issue = github.get_issue(&repo, issue_number).await?;
 
-            // Generate slug and agent name
+            // Generate slug and agent identity
             let slug = slugify(&issue.title);
-            let agent_suffix = options.agent_type.suffix();
-            let internal_name = format!("gh-{}-{}-{}", issue_id, slug, agent_suffix);
+            let identity = AgentIdentity::new(format!("gh-{}-{}", issue_id, slug), options.agent_type);
+            let agent_name = identity.internal_name();
 
             // Determine base branch (use birth_branch for root detection)
             let default_base = self.birth_branch.as_parent_branch().to_string();
@@ -52,6 +52,7 @@ impl AgentControlService {
                 .as_ref()
                 .map(|b| b.as_str().to_string())
                 .unwrap_or(default_base);
+            let agent_suffix = options.agent_type.suffix();
             let branch_name = if self.birth_branch.depth() == 0 {
                 format!("gh-{}/{}-{}", issue_id, slug, agent_suffix)
             } else {
@@ -59,7 +60,7 @@ impl AgentControlService {
             };
 
             // Create worktree
-            let worktree_path = self.worktree_base.join(&internal_name);
+            let worktree_path = self.worktree_base.join(agent_name.as_str());
 
             self.create_worktree_checked(&worktree_path, &branch_name, &base)
                 .await?;
@@ -69,16 +70,16 @@ impl AgentControlService {
 
             // Write .mcp.json for the agent
             let role = match options.agent_type {
-                AgentType::Claude => "tl",
-                AgentType::Gemini => "dev",
-                AgentType::Shoal => "shoal",
+                AgentType::Claude => crate::domain::Role::tl(),
+                AgentType::Gemini => crate::domain::Role::dev(),
+                AgentType::Shoal => crate::domain::Role::shoal(),
                 AgentType::Process => unreachable!("Process agents are not spawned via effects"),
             };
             self.write_agent_mcp_config(
                 &effective_project_dir,
                 &agent_dir,
                 options.agent_type,
-                role,
+                &role,
             )
             .await?;
 
@@ -105,9 +106,9 @@ impl AgentControlService {
             let display_name = options.agent_type.display_name(&issue_id, &slug);
 
             let env_vars = self.common_spawn_env(
-                &internal_name,
+                &agent_name,
                 self.effective_birth_branch(Some(caller_bb)).as_ref(),
-                role,
+                &role,
             );
 
             // Open tmux window with cwd = worktree_path
@@ -122,14 +123,14 @@ impl AgentControlService {
                 .await?;
 
             // Store window_id for message delivery and cleanup
-            let routing = RoutingInfo::window(window_id.as_str());
-            self.finalize_spawn(&internal_name, routing).await?;
+            let routing = RoutingInfo::window(window_id);
+            self.finalize_spawn(&agent_name, routing).await?;
 
-            self.emit_agent_started(&internal_name)?;
+            self.emit_agent_started(&agent_name)?;
 
             Ok::<SpawnResult, anyhow::Error>(SpawnResult {
                 agent_dir: agent_dir.clone(),
-                tab_name: internal_name,
+                agent_name,
                 issue_title: issue.title,
                 agent_type: options.agent_type,
             })
@@ -199,28 +200,26 @@ impl AgentControlService {
 
             let effective_project_dir = self.effective_project_dir(options.subrepo.as_deref())?;
 
-            // Sanitize name for internal use
-            let slug = slugify(options.name.as_str());
-            let agent_suffix = options.agent_type.suffix();
-            let internal_name = format!("{}-{}", slug, agent_suffix);
-            let display_name = format!("{} {}", options.agent_type.emoji(), slug);
+            // Sanitize name and construct typed identity
+            let identity = AgentIdentity::new(slugify(options.name.as_str()), options.agent_type);
+            let agent_name = identity.internal_name();
+            let display_name = identity.display_name();
 
             // Idempotency check: if tmux window is alive, return existing info
             let tab_alive = self.is_tmux_window_alive(&display_name).await;
 
             info!(
                 name = %options.name,
-                internal_name,
+                agent_name = %agent_name,
                 tab_alive,
                 "Idempotency check"
             );
 
             if tab_alive {
                 info!(name = %options.name, "Teammate already running, returning existing");
-                // TODO: Return actual worktree path if possible, but for now empty is fine as it's just info
                 return Ok(SpawnResult {
                     agent_dir: PathBuf::new(),
-                    tab_name: internal_name,
+                    agent_name,
                     issue_title: options.name.to_string(),
                     agent_type: options.agent_type,
                 });
@@ -244,16 +243,17 @@ impl AgentControlService {
 
             // Use '.' separator to avoid directory/file conflicts in git refs
             // and avoid ambiguity with '-' word separators in slugs.
-            let branch_name = format!("{}.{}", base_branch, slug);
-            let worktree_path = self.worktree_base.join(&internal_name);
+            let branch_name = format!("{}.{}", base_branch, identity.slug());
+            let worktree_path = self.worktree_base.join(agent_name.as_str());
 
             self.create_worktree_checked(&worktree_path, &branch_name, &base_branch)
                 .await?;
 
+            let role = crate::domain::Role::dev();
             let mut env_vars = self.common_spawn_env(
-                &internal_name,
+                &agent_name,
                 self.effective_birth_branch(Some(caller_bb)).as_ref(),
-                "dev",
+                &role,
             );
 
             // Write per-agent MCP config into the worktree
@@ -261,7 +261,7 @@ impl AgentControlService {
                 &effective_project_dir,
                 &worktree_path,
                 options.agent_type,
-                "dev",
+                &role,
             )
             .await?;
 
@@ -286,14 +286,14 @@ impl AgentControlService {
                 .await?;
 
             // Store window_id for message delivery and cleanup
-            let routing = RoutingInfo::window(window_id.as_str());
-            self.finalize_spawn(&internal_name, routing).await?;
+            let routing = RoutingInfo::window(window_id);
+            self.finalize_spawn(&agent_name, routing).await?;
 
-            self.emit_agent_started(&internal_name)?;
+            self.emit_agent_started(&agent_name)?;
 
             Ok::<SpawnResult, anyhow::Error>(SpawnResult {
                 agent_dir: PathBuf::new(),
-                tab_name: internal_name,
+                agent_name,
                 issue_title: options.name.to_string(),
                 agent_type: options.agent_type,
             })
@@ -410,25 +410,22 @@ impl AgentControlService {
         let result = timeout(SPAWN_TIMEOUT, async {
             self.resolve_tmux_session()?;
 
-            // Sanitize name for internal use
-            let slug = slugify(&options.name);
-            let internal_name = format!("{}-gemini", slug);
-            let display_name = format!("{} {}", AgentType::Gemini.emoji(), slug);
+            // Sanitize name and construct typed identity
+            let identity = AgentIdentity::new(slugify(&options.name), AgentType::Gemini);
+            let agent_name = identity.internal_name();
+            let display_name = identity.display_name();
 
             // Idempotency: check if agent config dir already exists (workers are panes, not tabs)
             let agent_config_dir = self.project_dir
                 .join(".exo")
                 .join("agents")
-                .join(&internal_name);
+                .join(agent_name.as_str());
             let settings_path = agent_config_dir.join("settings.json");
             if settings_path.exists() {
                 // Check tmux pane liveness — settings.json can outlive the pane
                 let pane_alive = match RoutingInfo::read_from_dir(&agent_config_dir).await {
                     Ok(routing) => match routing.pane_id {
-                        Some(ref pid) => match PaneId::parse(pid) {
-                            Ok(pane_id) => self.tmux()?.pane_exists(&pane_id).await.unwrap_or(false),
-                            Err(_) => false,
-                        },
+                        Some(ref pane_id) => self.tmux()?.pane_exists(pane_id).await.unwrap_or(false),
                         None => false,
                     },
                     Err(_) => false,
@@ -437,7 +434,7 @@ impl AgentControlService {
                     info!(name = %options.name, "Worker pane still alive, returning existing");
                     return Ok(SpawnResult {
                         agent_dir: PathBuf::new(),
-                        tab_name: internal_name,
+                        agent_name,
                         issue_title: options.name.clone(),
                         agent_type: AgentType::Gemini,
                     });
@@ -449,7 +446,8 @@ impl AgentControlService {
                 }
             }
 
-            let mut env_vars = self.common_spawn_env(&internal_name, self.effective_birth_branch(Some(&ctx.birth_branch)).as_ref(), "worker");
+            let role = crate::domain::Role::worker();
+            let mut env_vars = self.common_spawn_env(&agent_name, self.effective_birth_branch(Some(&ctx.birth_branch)).as_ref(), &role);
 
             // Write Gemini settings to worker config dir in project root
             fs::create_dir_all(&agent_config_dir).await?;
@@ -458,12 +456,12 @@ impl AgentControlService {
             // Workers don't have worktrees, so git-based resolution fails. This file is the fallback.
             let parent_bb = self.effective_birth_branch(Some(&ctx.birth_branch));
             fs::write(agent_config_dir.join(".birth_branch"), parent_bb.as_str()).await?;
-            let context_path = self.resolve_role_context("worker");
-            let settings = Self::generate_gemini_worker_settings(&internal_name, context_path.as_deref(), &self.extra_mcp_servers);
+            let context_path = self.resolve_role_context(&role);
+            let settings = Self::generate_gemini_worker_settings(agent_name.as_str(), context_path.as_deref(), &self.extra_mcp_servers);
             fs::write(&settings_path, serde_json::to_string_pretty(&settings)?).await?;
             info!(
                 path = %settings_path.display(),
-                name = %internal_name,
+                agent_name = %agent_name,
                 "Wrote worker Gemini settings to agent config dir"
             );
 
@@ -499,15 +497,15 @@ impl AgentControlService {
             .await?;
 
             // Store pane_id for message delivery and cleanup
-            let routing = RoutingInfo::pane(pane_id.as_str(), &caller_tab);
-            self.finalize_spawn(&internal_name, routing)
+            let routing = RoutingInfo::pane(pane_id, &caller_tab);
+            self.finalize_spawn(&agent_name, routing)
                 .await?;
 
-            self.emit_agent_started(&internal_name)?;
+            self.emit_agent_started(&agent_name)?;
 
             Ok::<SpawnResult, anyhow::Error>(SpawnResult {
                 agent_dir: PathBuf::new(),
-                tab_name: internal_name,
+                agent_name,
                 issue_title: options.name.clone(),
                 agent_type: AgentType::Gemini,
             })
@@ -546,20 +544,19 @@ impl AgentControlService {
 
             let effective_project_dir = &self.project_dir;
 
-            // Sanitize branch name for internal use
-            let slug = slugify(&options.branch_name);
+            // Sanitize branch name and construct typed identity
             let agent_type = options.agent_type;
-            let agent_suffix = agent_type.suffix();
-            let internal_name = format!("{}-{}", slug, agent_suffix);
-            let display_name = format!("{} {}", agent_type.emoji(), slug);
+            let identity = AgentIdentity::new(slugify(&options.branch_name), agent_type);
+            let agent_name = identity.internal_name();
+            let display_name = identity.display_name();
 
             // Idempotency check: if tmux window is alive, return existing info
             let tab_alive = self.is_tmux_window_alive(&display_name).await;
             if tab_alive {
-                info!(slug = %slug, "Subtree already running, returning existing");
+                info!(slug = %identity.slug(), "Subtree already running, returning existing");
                 return Ok(SpawnResult {
-                    agent_dir: self.worktree_base.join(&slug),
-                    tab_name: internal_name,
+                    agent_dir: self.worktree_base.join(identity.slug()),
+                    agent_name,
                     issue_title: options.branch_name.clone(),
                     agent_type,
                 });
@@ -572,7 +569,8 @@ impl AgentControlService {
             ensure_branch_pushed(&self.git_wt, current_branch, effective_project_dir).await;
 
             // Branch: {current_branch}.{slug}
-            let child_birth = effective_birth.child(&slug);
+            let slug = identity.slug();
+            let child_birth = effective_birth.child(slug);
             let branch_name = child_birth.to_string();
 
             // Path resolution: working_dir overrides the default worktree location.
@@ -581,7 +579,7 @@ impl AgentControlService {
             let (worktree_path, is_custom_dir) = if let Some(ref custom_dir) = options.working_dir {
                 (custom_dir.clone(), true)
             } else {
-                (self.worktree_base.join(&slug), false)
+                (self.worktree_base.join(slug), false)
             };
 
             if options.standalone_repo {
@@ -595,7 +593,8 @@ impl AgentControlService {
 
             self.create_socket_symlink(&worktree_path).await;
 
-            let role = options.role.as_deref().unwrap_or("tl");
+            let default_tl = crate::domain::Role::tl();
+            let role = options.role.as_ref().unwrap_or(&default_tl);
 
             // Copy role context into worktree.
             // Must be a copy, not a symlink — symlinks escape the worktree boundary
@@ -628,7 +627,7 @@ impl AgentControlService {
                 }
             }
 
-            let mut env_vars = self.common_spawn_env(&internal_name, &branch_name, role);
+            let mut env_vars = self.common_spawn_env(&agent_name, &branch_name, role);
             // Enable Claude Code Agent Teams for native inter-agent messaging
             env_vars.insert(
                 "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".to_string(),
@@ -636,6 +635,7 @@ impl AgentControlService {
             );
             self.write_agent_mcp_config(effective_project_dir, &worktree_path, agent_type, role)
                 .await?;
+
 
             // Write .claude/settings.local.json with hooks (SessionStart registers UUID for --fork-session)
             let binary_path = crate::util::find_exomonad_binary();
@@ -693,7 +693,7 @@ impl AgentControlService {
             let fork_id = options.parent_session_id.as_ref().map(|id| id.as_str());
 
             // Open tmux window with cwd = worktree_path
-            let agent_config_dir = self.project_dir.join(".exo").join("agents").join(&internal_name);
+            let agent_config_dir = self.project_dir.join(".exo").join("agents").join(agent_name.as_str());
             let window_id = match self.new_tmux_window_inner(
                 &display_name,
                 &worktree_path,
@@ -706,7 +706,7 @@ impl AgentControlService {
             .await {
                 Ok(wid) => wid,
                 Err(e) => {
-                    warn!(name = %slug, error = %e, "tmux window creation failed, rolling back");
+                    warn!(name = %identity.slug(), error = %e, "tmux window creation failed, rolling back");
                     let _ = fs::remove_dir_all(&agent_config_dir).await;
                     // Remove worktree if it was created
                     if worktree_path.exists() {
@@ -719,13 +719,13 @@ impl AgentControlService {
             };
 
             // Store window_id for message delivery and cleanup
-            let routing = RoutingInfo::window(window_id.as_str());
-            self.finalize_spawn(&internal_name, routing)
+            let routing = RoutingInfo::window(window_id);
+            self.finalize_spawn(&agent_name, routing)
                 .await?;
 
             Ok::<SpawnResult, anyhow::Error>(SpawnResult {
                 agent_dir: worktree_path.clone(),
-                tab_name: internal_name,
+                agent_name,
                 issue_title: options.branch_name.clone(),
                 agent_type,
             })
@@ -761,20 +761,19 @@ impl AgentControlService {
             // Parent branch derived from typed birth-branch.
             let current_branch = effective_birth.as_parent_branch().to_string();
 
-            // Sanitize branch name
-            let slug = slugify(&options.branch_name);
+            // Sanitize branch name and construct typed identity
             let agent_type = options.agent_type;
-            let agent_suffix = agent_type.suffix();
-            let internal_name = format!("{}-{}", slug, agent_suffix);
-            let display_name = format!("{} {}", agent_type.emoji(), slug);
+            let identity = AgentIdentity::new(slugify(&options.branch_name), agent_type);
+            let agent_name = identity.internal_name();
+            let display_name = identity.display_name();
 
             // Idempotency check
             let tab_alive = self.is_tmux_window_alive(&display_name).await;
             if tab_alive {
-                info!(slug = %slug, "Leaf subtree already running, returning existing");
+                info!(slug = %identity.slug(), "Leaf subtree already running, returning existing");
                 return Ok(SpawnResult {
-                    agent_dir: self.worktree_base.join(&slug),
-                    tab_name: internal_name,
+                    agent_dir: self.worktree_base.join(identity.slug()),
+                    agent_name,
                     issue_title: options.branch_name.clone(),
                     agent_type,
                 });
@@ -783,10 +782,11 @@ impl AgentControlService {
             // Push parent branch so child PRs can reference it as base
             ensure_branch_pushed(&self.git_wt, &current_branch, effective_project_dir).await;
 
-            let child_birth = effective_birth.child(&slug);
+            let slug = identity.slug();
+            let child_birth = effective_birth.child(slug);
             let branch_name = child_birth.to_string();
 
-            let worktree_path = self.worktree_base.join(&slug);
+            let worktree_path = self.worktree_base.join(slug);
 
             if options.standalone_repo {
                 self.init_standalone_repo(&worktree_path).await?;
@@ -799,8 +799,9 @@ impl AgentControlService {
 
             self.create_socket_symlink(&worktree_path).await;
 
-            let role = options.role.as_deref().unwrap_or("dev");
-            let mut env_vars = self.common_spawn_env(&internal_name, &branch_name, role);
+            let default_dev = crate::domain::Role::dev();
+            let role = options.role.as_ref().unwrap_or(&default_dev);
+            let mut env_vars = self.common_spawn_env(&agent_name, &branch_name, role);
             self.write_agent_mcp_config(effective_project_dir, &worktree_path, agent_type, role)
                 .await?;
 
@@ -819,7 +820,7 @@ impl AgentControlService {
 
             // Open tmux window (not pane)
             // Task already includes leaf completion protocol — rendered by Haskell Prompt builder.
-            let agent_config_dir = self.project_dir.join(".exo").join("agents").join(&internal_name);
+            let agent_config_dir = self.project_dir.join(".exo").join("agents").join(agent_name.as_str());
             let window_id = match self.new_tmux_window(
                 &display_name,
                 &worktree_path,
@@ -830,7 +831,7 @@ impl AgentControlService {
             .await {
                 Ok(wid) => wid,
                 Err(e) => {
-                    warn!(name = %slug, error = %e, "tmux window creation failed, rolling back");
+                    warn!(name = %identity.slug(), error = %e, "tmux window creation failed, rolling back");
                     let _ = fs::remove_dir_all(&agent_config_dir).await;
                     // Remove worktree if it was created
                     if worktree_path.exists() {
@@ -843,13 +844,13 @@ impl AgentControlService {
             };
 
             // Store window_id for message delivery and cleanup
-            let routing = RoutingInfo::window(window_id.as_str());
-            self.finalize_spawn(&internal_name, routing)
+            let routing = RoutingInfo::window(window_id);
+            self.finalize_spawn(&agent_name, routing)
                 .await?;
 
             Ok::<SpawnResult, anyhow::Error>(SpawnResult {
                 agent_dir: worktree_path.clone(),
-                tab_name: internal_name,
+                agent_name,
                 issue_title: options.branch_name.clone(),
                 agent_type,
             })

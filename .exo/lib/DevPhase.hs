@@ -35,7 +35,6 @@ data DevEvent
   = PRCreated PRNumber Text Text
   | NotifyParentSuccess Text
   | NotifyParentFailure Text
-  | ShutdownRequested
   | ReviewReceivedEv PRNumber Text
   | ReviewApprovedEv PRNumber
   | FixesPushedEv PRNumber Text
@@ -52,8 +51,6 @@ instance StateMachine DevPhase DevEvent where
       Transitioned DevDone
     NotifyParentFailure msg ->
       Transitioned (DevFailed msg)
-    ShutdownRequested ->
-      Transitioned DevDone
     ReviewReceivedEv prNum comments ->
       Transitioned (DevChangesRequested prNum [comments])
     ReviewApprovedEv prNum ->

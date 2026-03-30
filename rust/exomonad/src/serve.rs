@@ -862,6 +862,7 @@ Run `exomonad recompile` first to build it.",
         git_wt.clone(),
     )
     .with_acp_registry(acp_registry.clone())
+    .with_team_registry(team_registry.clone())
     .with_wasm_name(wasm_name.clone());
     let worktree_base = config.worktree_base.clone();
     agent_control = agent_control.with_worktree_base(worktree_base.clone());

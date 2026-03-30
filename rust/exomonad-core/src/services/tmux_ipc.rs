@@ -22,6 +22,19 @@ static INJECTION_LOCKS: std::sync::LazyLock<
 /// Stable tmux window identifier (@N format, base-index immune).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowId(String);
+
+impl serde::Serialize for WindowId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WindowId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        WindowId::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
 // ... (WindowId and PaneId implementations remain same, skipping for brevity in thought, but I must include them in new_string)
 impl WindowId {
     pub fn parse(s: &str) -> Result<Self> {
@@ -49,6 +62,19 @@ impl fmt::Display for WindowId {
 /// Tmux pane identifier (%N format).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PaneId(String);
+
+impl serde::Serialize for PaneId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PaneId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        PaneId::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
 
 impl PaneId {
     pub fn parse(s: &str) -> Result<Self> {

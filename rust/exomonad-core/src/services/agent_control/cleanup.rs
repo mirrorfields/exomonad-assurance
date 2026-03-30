@@ -10,7 +10,7 @@ impl AgentControlService {
         // Try to find agent in list (for metadata and window matching).
         // Failure here is non-fatal to allow cleaning up worker panes (invisible to list_agents).
         let agents = self.list_agents().await.unwrap_or_default();
-        let agent = agents.iter().find(|a| a.issue_id == identifier);
+        let agent = agents.iter().find(|a| a.internal_name.as_str() == identifier);
 
         info!(
             identifier,
@@ -18,64 +18,69 @@ impl AgentControlService {
             "Initiating cleanup_agent"
         );
 
-        // Reconstruct names for paths and exact window matching.
-        // Invariant: identifier can be a clean slug ("my-feature") or an internal name ("my-feature-gemini").
-        // We must derive the clean slug for window matching (e.g. "💎 my-feature") and
-        // the internal_name for config directory lookup and worker cleanup.
-        // This prevents suffix doubling (e.g. "my-feature-gemini-gemini") if called with the internal name.
-        let (agent_type, slug) = match agent {
+        // Parse identifier into AgentIdentity to get consistent slug/internal_name/display_name.
+        // Identifier can be a bare slug ("my-feature") or an internal name ("my-feature-gemini").
+        // AgentIdentity normalizes both forms and prevents suffix doubling.
+        let identity = match agent {
             Some(a) => {
                 let at = a.agent_type.unwrap_or(AgentType::Gemini);
                 let s = a.slug.as_ref().map(|s| s.as_str()).unwrap_or(identifier);
-                // If slug still contains suffix, strip it to get the clean slug for window name
                 let suffix = format!("-{}", at.suffix());
-                (at, s.strip_suffix(&suffix).unwrap_or(s).to_string())
+                let clean = s.strip_suffix(&suffix).unwrap_or(s);
+                AgentIdentity::new(clean.to_string(), at)
             }
-            None => {
-                let at = AgentType::from_dir_name(identifier);
-                let suffix = format!("-{}", at.suffix());
-                (
-                    at,
-                    identifier
-                        .strip_suffix(&suffix)
-                        .unwrap_or(identifier)
-                        .to_string(),
-                )
-            }
+            None => AgentIdentity::from_internal_name(identifier),
         };
 
-        // Remove synthetic team member registration (non-fatal if not registered)
-        let team_name = TeamName::from(format!("exo-{}", self.birth_branch).as_str());
-        if let Err(e) =
-            crate::services::synthetic_members::remove_synthetic_member(&team_name, &slug)
-        {
-            warn!(team = %team_name, member = %slug, error = %e, "Failed to remove synthetic team member (non-fatal)");
+        // Remove synthetic team member registration (non-fatal if not registered).
+        // Synthetic members are registered under internal_name (e.g., "beta-claude").
+        if let Some(ref team_reg) = self.team_registry {
+            let birth_branch_str = self.birth_branch.as_str();
+            let team_info = if let Some(info) = team_reg.get(birth_branch_str).await {
+                Some(info)
+            } else if let Some(parent) = self.birth_branch.parent() {
+                team_reg.get(parent.as_str()).await
+            } else {
+                None
+            };
+            let member_name = identity.internal_name();
+            if let Some(info) = team_info {
+                let team_name = TeamName::from(info.team_name.as_str());
+                if let Err(e) = crate::services::synthetic_members::remove_synthetic_member(
+                    &team_name,
+                    &member_name,
+                ) {
+                    warn!(team = %team_name, member = %member_name, error = %e, "Failed to remove synthetic team member (non-fatal)");
+                }
+            } else {
+                debug!(member = %member_name, "No team found in registry — skipping synthetic member removal");
+            }
+        } else {
+            debug!(member = %identity.internal_name(), "No team registry — skipping synthetic member removal");
         }
 
-        let internal_name = format!("{}-{}", slug, agent_type.suffix());
-        let display_name = Some(format!("{} {}", agent_type.emoji(), slug));
+        let internal_name = identity.internal_name();
+        let display_name = Some(identity.display_name());
 
         // Remove per-agent config directory (.exo/agents/{name}/)
         let agent_config_dir = self
             .project_dir
             .join(".exo")
             .join("agents")
-            .join(&internal_name);
+            .join(internal_name.as_str());
 
         // Try direct cleanup via stored window_id (O(1), no listing needed)
         let mut window_closed = false;
         if let Ok(routing) = RoutingInfo::read_from_dir(&agent_config_dir).await {
-            if let Some(wid_str) = routing.window_id {
-                if let Ok(wid) = crate::services::tmux_ipc::WindowId::parse(&wid_str) {
-                    let tmux = self.tmux()?;
-                    match tmux.kill_window(&wid).await {
-                        Ok(()) => {
-                            info!(identifier, "Closed tmux window via stored window_id");
-                            window_closed = true;
-                        }
-                        Err(e) => {
-                            warn!(identifier, error = %e, "kill_window by stored ID failed, falling back to name match");
-                        }
+            if let Some(wid) = routing.window_id {
+                let tmux = self.tmux()?;
+                match tmux.kill_window(&wid).await {
+                    Ok(()) => {
+                        info!(identifier, "Closed tmux window via stored window_id");
+                        window_closed = true;
+                    }
+                    Err(e) => {
+                        warn!(identifier, error = %e, "kill_window by stored ID failed, falling back to name match");
                     }
                 }
             }
@@ -109,15 +114,14 @@ impl AgentControlService {
         }
 
         // Remove git worktree if it exists.
-        // spawn_subtree/spawn_leaf_subtree use slug (identifier) as dir name,
+        // spawn_subtree/spawn_leaf_subtree use bare slug as dir name,
         // spawn_agent/spawn_gemini_teammate use internal_name ({id}-{type}).
-        // Try slug first, fall back to internal_name.
         let worktree_path = {
-            let slug_path = self.worktree_base.join(identifier);
+            let slug_path = self.worktree_base.join(identity.slug());
             if slug_path.exists() {
                 slug_path
             } else {
-                self.worktree_base.join(&internal_name)
+                self.worktree_base.join(internal_name.as_str())
             }
         };
         if worktree_path.exists() {
@@ -208,7 +212,7 @@ impl AgentControlService {
 
         for agent in agents {
             if let Some(ref filter) = issue_filter {
-                if !filter.contains(agent.issue_id.as_str()) {
+                if !filter.contains(agent.internal_name.as_str()) {
                     continue;
                 }
             }
@@ -221,8 +225,8 @@ impl AgentControlService {
 
             // Only clean up stopped agents (no running tab)
             if !agent.has_tab {
-                info!(issue_id = %agent.issue_id, "Agent is stopped, marking for cleanup");
-                to_cleanup.push(agent.issue_id);
+                info!(agent = %agent.internal_name, "Agent is stopped, marking for cleanup");
+                to_cleanup.push(agent.internal_name.to_string());
             }
         }
 
@@ -274,7 +278,7 @@ impl AgentControlService {
                         let has_tab = windows.iter().any(|t| t == &display_name);
 
                         agents.push(AgentInfo {
-                            issue_id: name.to_string(),
+                            internal_name: AgentName::from(name),
                             has_tab,
                             topology: Topology::WorktreePerAgent,
                             agent_dir: Some(path.clone()),
@@ -337,7 +341,7 @@ impl AgentControlService {
                     let has_tab = windows.iter().any(|t| t == &display_name);
 
                     agents.push(AgentInfo {
-                        issue_id: name.to_string(),
+                        internal_name: AgentName::from(name),
                         has_tab,
                         topology: Topology::SharedDir,
                         agent_dir: Some(path.clone()),

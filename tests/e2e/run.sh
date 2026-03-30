@@ -199,7 +199,7 @@ Gemini leaves file PRs. Their PRs target the SPAWNER's branch (your branch or a 
 1. Read the instruction from test-runner carefully
 2. Execute EXACTLY what is asked — use the specified tool, slug names, file paths
 3. After spawning agents, IDLE — end your turn and wait for notifications
-4. When notified ([FIXES PUSHED], [REVIEW TIMEOUT], [PR READY]), merge with merge_pr
+4. When notified ([FIXES PUSHED], [PR READY]), merge with merge_pr
 5. After merging, check if more waves are needed
 
 ## NEVER Do These Things
@@ -213,7 +213,6 @@ Gemini leaves file PRs. Their PRs target the SPAWNER's branch (your branch or a 
 - `[from: id] ...` — status report from child. Read it. Do not act AS the child.
 - `[PR READY]` — Copilot approved. Merge with `merge_pr`.
 - `[FIXES PUSHED]` — child addressed review. Merge if CI passes.
-- `[REVIEW TIMEOUT]` — no review after timeout. Merge if CI passes.
 - `[FAILED: id]` — child exhausted retries. Re-decompose or escalate.
 EOF
 

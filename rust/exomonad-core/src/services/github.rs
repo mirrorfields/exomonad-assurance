@@ -24,11 +24,25 @@ pub fn build_octocrab() -> Result<Octocrab> {
         ));
     }
 
+    let token_prefix = if token.len() > 8 {
+        &token[..8]
+    } else {
+        &token[..token.len().min(4)]
+    };
+
+    let base_url = std::env::var("GITHUB_API_URL").ok();
+
+    info!(
+        token_prefix = token_prefix,
+        base_url = base_url.as_deref().unwrap_or("https://api.github.com"),
+        "Building octocrab client"
+    );
+
     let mut builder = OctocrabBuilder::new().personal_token(token);
 
-    if let Ok(base_url) = std::env::var("GITHUB_API_URL") {
+    if let Some(ref url) = base_url {
         builder = builder
-            .base_uri(&base_url)
+            .base_uri(url)
             .context("Invalid GITHUB_API_URL")?;
     }
 
@@ -39,14 +53,36 @@ pub fn build_octocrab() -> Result<Octocrab> {
 
 /// Map octocrab errors to user-friendly messages for GitHub API operations.
 pub fn map_octo_err(e: octocrab::Error) -> String {
-    if let octocrab::Error::GitHub { source, .. } = &e {
-        match source.status_code.as_u16() {
+    match &e {
+        octocrab::Error::GitHub { source, .. } => match source.status_code.as_u16() {
             401 => return "GitHub authentication failed. Token may be expired or invalid. Set a valid GITHUB_TOKEN.".to_string(),
             403 => return "GitHub token lacks required permissions. Ensure your token has `repo` scope.".to_string(),
-            _ => {}
+            _ => return format!("GitHub API error ({}): {}", source.status_code, source.message),
+        },
+        octocrab::Error::Service { source, .. } => {
+            // Classify the hyper/reqwest error for diagnostics
+            let inner = format!("{}", source);
+            let kind = if inner.contains("Connect") {
+                "connect"
+            } else if inner.contains("timed out") || inner.contains("Timeout") {
+                "timeout"
+            } else if inner.contains("dns") || inner.contains("resolve") {
+                "dns"
+            } else if inner.contains("certificate") || inner.contains("tls") || inner.contains("SSL") {
+                "tls"
+            } else {
+                "unknown"
+            };
+            let base_url = std::env::var("GITHUB_API_URL")
+                .unwrap_or_else(|_| "https://api.github.com".to_string());
+            return format!(
+                "Service error (kind={}, target={}): {}",
+                kind, base_url, inner
+            );
         }
+        _ => {}
     }
-    e.to_string()
+    format!("{}", e)
 }
 
 fn octocrab_issue_state(state: models::IssueState) -> ItemState {

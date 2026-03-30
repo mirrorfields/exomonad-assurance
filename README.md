@@ -97,7 +97,6 @@ Haskell WASM is a typed configuration DSL — tool schemas, dispatch logic, hook
 | `merge_pr` | root, tl | Merge a child agent's PR and fetch changes |
 | `notify_parent` | tl, dev, worker | Send message to parent agent via Teams inbox |
 | `send_message` | all | Send message to any agent (Teams, ACP, UDS, or tmux) |
-| `shutdown` | dev, worker | Gracefully exit: notify parent, close own pane |
 | `task_list` | dev, worker | List tasks from shared task list |
 | `task_get` | dev, worker | Get task by ID |
 | `task_update` | dev, worker | Update task status/owner/activeForm |

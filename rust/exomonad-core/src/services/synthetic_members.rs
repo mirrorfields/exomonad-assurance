@@ -1,4 +1,4 @@
-use crate::domain::TeamName;
+use crate::domain::{AgentName, TeamName};
 use anyhow::{Context, Result};
 use claude_teams_bridge::file_lock::{fsync_dir, FileLock};
 use serde_json::Value;
@@ -12,11 +12,11 @@ use tracing::{info, warn};
 /// Reads the existing config, appends to the members array, writes back atomically.
 pub fn register_synthetic_member(
     team_name: &TeamName,
-    member_name: &str,
+    member_name: &AgentName,
     agent_type: &str,
 ) -> Result<()> {
     let config_path = team_config_path(team_name)?;
-    register_synthetic_member_at_path(&config_path, team_name, member_name, agent_type)
+    register_synthetic_member_at_path(&config_path, team_name, member_name.as_str(), agent_type)
 }
 
 fn register_synthetic_member_at_path(
@@ -95,9 +95,9 @@ fn register_synthetic_member_at_path(
 }
 
 /// Remove a synthetic member from a Claude Teams config.json.
-pub fn remove_synthetic_member(team_name: &TeamName, member_name: &str) -> Result<()> {
+pub fn remove_synthetic_member(team_name: &TeamName, member_name: &AgentName) -> Result<()> {
     let config_path = team_config_path(team_name)?;
-    remove_synthetic_member_at_path(&config_path, team_name, member_name)
+    remove_synthetic_member_at_path(&config_path, team_name, member_name.as_str())
 }
 
 fn remove_synthetic_member_at_path(
