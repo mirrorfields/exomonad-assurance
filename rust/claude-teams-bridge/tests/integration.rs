@@ -571,10 +571,22 @@ async fn lead_deregistered_still_resolves_via_config() {
 
     let registry = TeamRegistry::new();
     registry
-        .register("team-lead", TeamInfo { team_name: team.into(), inbox_name: "team-lead".into() })
+        .register(
+            "team-lead",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "team-lead".into(),
+            },
+        )
         .await;
     registry
-        .register("worker-1", TeamInfo { team_name: team.into(), inbox_name: "worker-1".into() })
+        .register(
+            "worker-1",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "worker-1".into(),
+            },
+        )
         .await;
 
     // TL shuts down — deregister from in-memory
@@ -624,7 +636,13 @@ async fn lead_replaced_config_authoritative() {
     // Register only new-lead in memory (old-lead is gone)
     let registry = TeamRegistry::new();
     registry
-        .register("new-lead", TeamInfo { team_name: team.into(), inbox_name: "new-lead".into() })
+        .register(
+            "new-lead",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "new-lead".into(),
+            },
+        )
         .await;
 
     // Config says old-lead is the lead — config wins
@@ -688,7 +706,13 @@ async fn cross_team_name_collision() {
     let registry = TeamRegistry::new();
     // Register sender in alpha
     registry
-        .register("sender", TeamInfo { team_name: "alpha".into(), inbox_name: "sender".into() })
+        .register(
+            "sender",
+            TeamInfo {
+                team_name: "alpha".into(),
+                inbox_name: "sender".into(),
+            },
+        )
         .await;
 
     // Tier 2 resolve with hint scopes to correct team
@@ -700,10 +724,19 @@ async fn cross_team_name_collision() {
 
     // Register "worker" in-memory for alpha — Tier 1 wins regardless of hint
     registry
-        .register("worker", TeamInfo { team_name: "alpha".into(), inbox_name: "worker".into() })
+        .register(
+            "worker",
+            TeamInfo {
+                team_name: "alpha".into(),
+                inbox_name: "worker".into(),
+            },
+        )
         .await;
     let result = registry.resolve("worker", Some("beta")).await.unwrap();
-    assert_eq!(result.team_name, "alpha", "Tier 1 (in-memory) must win over Tier 2 hint");
+    assert_eq!(
+        result.team_name, "alpha",
+        "Tier 1 (in-memory) must win over Tier 2 hint"
+    );
 }
 
 /// 5. Orphaned agent: not in any team, graceful None.
@@ -733,7 +766,13 @@ async fn orphaned_agent_returns_none() {
 
     let registry = TeamRegistry::new();
     registry
-        .register("lead", TeamInfo { team_name: team.into(), inbox_name: "lead".into() })
+        .register(
+            "lead",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "lead".into(),
+            },
+        )
         .await;
 
     // "ghost" is nowhere
@@ -808,7 +847,13 @@ async fn resolve_lead_name_match_fallback() {
 
     // Add in-memory entry → fallback picks it
     registry
-        .register("fallback-agent", TeamInfo { team_name: team2.into(), inbox_name: "fallback-agent".into() })
+        .register(
+            "fallback-agent",
+            TeamInfo {
+                team_name: team2.into(),
+                inbox_name: "fallback-agent".into(),
+            },
+        )
         .await;
     let lead3 = registry.resolve_lead(team2).await;
     assert_eq!(lead3, Some("fallback-agent".to_string()));
@@ -841,7 +886,14 @@ async fn inbox_survives_config_restructuring() {
 
     // Deliver message via Tier 2 resolve
     let info = TeamRegistry::resolve_from_config(team, "worker").unwrap();
-    write_to_inbox(&info.team_name, &info.inbox_name, "sender", "hello worker", "sum").unwrap();
+    write_to_inbox(
+        &info.team_name,
+        &info.inbox_name,
+        "sender",
+        "hello worker",
+        "sum",
+    )
+    .unwrap();
 
     // Overwrite config: rename "worker" to "senior-worker"
     let config_v2 = TeamConfig {
@@ -892,7 +944,10 @@ async fn concurrent_register_resolve_no_panic() {
             .await;
             // Immediately try to resolve self and others
             let self_result = reg.resolve(&name, None).await;
-            assert!(self_result.is_some(), "agent should resolve itself after register");
+            assert!(
+                self_result.is_some(),
+                "agent should resolve itself after register"
+            );
             // Resolve a potentially-not-yet-registered peer (should return Some or None, not panic)
             let _ = reg.resolve(&format!("agent-{}", (i + 1) % 20), None).await;
         }));
@@ -951,7 +1006,13 @@ async fn supervisor_to_lead_routing_chain() {
     let registry = TeamRegistry::new();
     // TL registered in memory (via SessionStart hook)
     registry
-        .register("team-lead", TeamInfo { team_name: team.into(), inbox_name: "team-lead".into() })
+        .register(
+            "team-lead",
+            TeamInfo {
+                team_name: team.into(),
+                inbox_name: "team-lead".into(),
+            },
+        )
         .await;
 
     // Simulate the chain: child knows supervisor name → resolve supervisor → get team → resolve_lead
@@ -959,7 +1020,10 @@ async fn supervisor_to_lead_routing_chain() {
     let supervisor_info = registry.resolve(supervisor_name, None).await.unwrap();
     assert_eq!(supervisor_info.team_name, team);
 
-    let lead = registry.resolve_lead(&supervisor_info.team_name).await.unwrap();
+    let lead = registry
+        .resolve_lead(&supervisor_info.team_name)
+        .await
+        .unwrap();
     assert_eq!(lead, "team-lead");
 
     // Deliver the notification to the lead's inbox
@@ -1050,8 +1114,16 @@ async fn live_teams_e2e() {
     );
     let config = claude_teams_bridge::read_team_config(team).unwrap();
     let member_names: Vec<&str> = config.members.iter().map(|m| m.name.as_str()).collect();
-    println!("[e2e] Team '{}' has {} members: {:?}", team, config.members.len(), member_names);
-    assert!(!config.members.is_empty(), "Team has no members — spawn at least one teammate");
+    println!(
+        "[e2e] Team '{}' has {} members: {:?}",
+        team,
+        config.members.len(),
+        member_names
+    );
+    assert!(
+        !config.members.is_empty(),
+        "Team has no members — spawn at least one teammate"
+    );
 
     let lead_name = {
         // Find lead by matching leadAgentId to member agentId, then fall back to name match
@@ -1059,7 +1131,12 @@ async fn live_teams_e2e() {
             .members
             .iter()
             .find(|m| m.agent_id == config.lead_agent_id)
-            .or_else(|| config.members.iter().find(|m| m.name == config.lead_agent_id))
+            .or_else(|| {
+                config
+                    .members
+                    .iter()
+                    .find(|m| m.name == config.lead_agent_id)
+            })
             .map(|m| m.name.clone())
             .unwrap_or_else(|| config.members[0].name.clone())
     };
@@ -1076,7 +1153,10 @@ async fn live_teams_e2e() {
     )
     .unwrap();
     let messages = read_inbox(team, &lead_name).unwrap();
-    let s1_msg = messages.iter().find(|m| m.timestamp == ts1).expect("Scenario 1 message not found in inbox");
+    let s1_msg = messages
+        .iter()
+        .find(|m| m.timestamp == ts1)
+        .expect("Scenario 1 message not found in inbox");
     assert_eq!(s1_msg.from, "e2e-test-runner");
     assert!(s1_msg.text.contains("Scenario 1"));
     assert!(!s1_msg.read);
@@ -1094,9 +1174,15 @@ async fn live_teams_e2e() {
         let info = resolved.unwrap();
         assert_eq!(info.team_name, team);
         assert_eq!(info.inbox_name, member.name);
-        println!("[e2e]   Resolved '{}': team={}, inbox={}", member.name, info.team_name, info.inbox_name);
+        println!(
+            "[e2e]   Resolved '{}': team={}, inbox={}",
+            member.name, info.team_name, info.inbox_name
+        );
     }
-    println!("[e2e] PASS: All {} members resolved via Tier 2", config.members.len());
+    println!(
+        "[e2e] PASS: All {} members resolved via Tier 2",
+        config.members.len()
+    );
 
     // ====== SCENARIO 3: Full registry flow (register sender, resolve recipient) ======
     println!("\n[e2e] === Scenario 3: Full registry flow ===");
@@ -1129,7 +1215,10 @@ async fn live_teams_e2e() {
     )
     .unwrap();
     let messages = read_inbox(team, &lead_name).unwrap();
-    assert!(messages.iter().any(|m| m.timestamp == ts3), "Scenario 3 message not in inbox");
+    assert!(
+        messages.iter().any(|m| m.timestamp == ts3),
+        "Scenario 3 message not in inbox"
+    );
     println!("[e2e] PASS: Full registry flow works end-to-end");
 
     // ====== SCENARIO 4: Multi-sender accumulation ======
@@ -1157,9 +1246,18 @@ async fn live_teams_e2e() {
         println!("[e2e]   Found message from '{}' at {}", sender, ts);
     }
     // Verify ordering: alpha before beta before gamma
-    let alpha_idx = messages.iter().position(|m| m.timestamp == sender_timestamps[0].1).unwrap();
-    let beta_idx = messages.iter().position(|m| m.timestamp == sender_timestamps[1].1).unwrap();
-    let gamma_idx = messages.iter().position(|m| m.timestamp == sender_timestamps[2].1).unwrap();
+    let alpha_idx = messages
+        .iter()
+        .position(|m| m.timestamp == sender_timestamps[0].1)
+        .unwrap();
+    let beta_idx = messages
+        .iter()
+        .position(|m| m.timestamp == sender_timestamps[1].1)
+        .unwrap();
+    let gamma_idx = messages
+        .iter()
+        .position(|m| m.timestamp == sender_timestamps[2].1)
+        .unwrap();
     assert!(alpha_idx < beta_idx, "alpha should come before beta");
     assert!(beta_idx < gamma_idx, "beta should come before gamma");
     println!("[e2e] PASS: 3 senders accumulated in order, no message loss");
@@ -1175,7 +1273,10 @@ async fn live_teams_e2e() {
         );
     }
     // Scenario 1 message should also be unread (we just wrote it)
-    assert!(!is_message_read(team, &lead_name, &ts1), "Scenario 1 message should be unread");
+    assert!(
+        !is_message_read(team, &lead_name, &ts1),
+        "Scenario 1 message should be unread"
+    );
     println!("[e2e] PASS: All test messages correctly marked as unread");
 
     // ====== SCENARIO 6: Cross-member delivery (to non-lead peer) ======
@@ -1189,7 +1290,10 @@ async fn live_teams_e2e() {
             &peer_info.team_name,
             &peer_info.inbox_name,
             "e2e-test-runner",
-            &format!("[E2E Scenario 6] Cross-member delivery to '{}'", peer_member.name),
+            &format!(
+                "[E2E Scenario 6] Cross-member delivery to '{}'",
+                peer_member.name
+            ),
             "E2E scenario 6",
         )
         .unwrap();
@@ -1199,14 +1303,20 @@ async fn live_teams_e2e() {
             "Scenario 6 message not found in {}'s inbox",
             peer_member.name
         );
-        println!("[e2e] PASS: Message delivered to non-lead peer '{}'", peer_member.name);
+        println!(
+            "[e2e] PASS: Message delivered to non-lead peer '{}'",
+            peer_member.name
+        );
     } else {
         println!("[e2e] SKIP: Only one member in team, cannot test cross-member delivery");
     }
 
     // ====== SUMMARY ======
     println!("\n[e2e] ====== ALL SCENARIOS PASSED ======");
-    println!("[e2e] Messages are live at ~/.claude/teams/{}/inboxes/", team);
+    println!(
+        "[e2e] Messages are live at ~/.claude/teams/{}/inboxes/",
+        team
+    );
     println!("[e2e] CC's InboxPoller will deliver them to the agents");
     println!("[e2e] Lead inbox: check for messages from 'e2e-test-runner', 'e2e-worker-alpha', 'e2e-worker-beta', 'e2e-worker-gamma'");
 }

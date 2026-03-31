@@ -428,6 +428,19 @@ pub enum PermissionMode {
     BypassPermissions,
 }
 
+impl PermissionMode {
+    /// Wire-format string (matches Claude Code CLI `--permission-mode` values).
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Default => "default",
+            Self::Plan => "plan",
+            Self::AcceptEdits => "acceptEdits",
+            Self::DontAsk => "dontAsk",
+            Self::BypassPermissions => "bypassPermissions",
+        }
+    }
+}
+
 impl<'de> serde::Deserialize<'de> for PermissionMode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -631,6 +644,34 @@ impl From<&str> for Role {
 impl From<String> for Role {
     fn from(s: String) -> Self {
         Self::new(s)
+    }
+}
+
+// ============================================================================
+// Tmux Layout
+// ============================================================================
+
+/// tmux window layout preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TmuxLayout {
+    Tiled,
+    EvenVertical,
+    EvenHorizontal,
+}
+
+impl TmuxLayout {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Tiled => "tiled",
+            Self::EvenVertical => "even-vertical",
+            Self::EvenHorizontal => "even-horizontal",
+        }
+    }
+}
+
+impl fmt::Display for TmuxLayout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -1163,7 +1204,7 @@ mod tests {
 
     #[test]
     fn test_address_from_proto_agent() {
-        use exomonad_proto::effects::events::{Address as ProtoAddr, address::Kind};
+        use exomonad_proto::effects::events::{address::Kind, Address as ProtoAddr};
         let addr = Address::from_proto(Some(ProtoAddr {
             kind: Some(Kind::Agent("worker-1".into())),
         }));
@@ -1173,7 +1214,7 @@ mod tests {
 
     #[test]
     fn test_address_from_proto_team_with_member() {
-        use exomonad_proto::effects::events::{Address as ProtoAddr, TeamAddress, address::Kind};
+        use exomonad_proto::effects::events::{address::Kind, Address as ProtoAddr, TeamAddress};
         let addr = Address::from_proto(Some(ProtoAddr {
             kind: Some(Kind::Team(TeamAddress {
                 team: "my-team".into(),
@@ -1192,7 +1233,7 @@ mod tests {
 
     #[test]
     fn test_address_from_proto_team_lead() {
-        use exomonad_proto::effects::events::{Address as ProtoAddr, TeamAddress, address::Kind};
+        use exomonad_proto::effects::events::{address::Kind, Address as ProtoAddr, TeamAddress};
         let addr = Address::from_proto(Some(ProtoAddr {
             kind: Some(Kind::Team(TeamAddress {
                 team: "my-team".into(),
@@ -1216,7 +1257,7 @@ mod tests {
 
     #[test]
     fn test_address_from_proto_empty_agent() {
-        use exomonad_proto::effects::events::{Address as ProtoAddr, address::Kind};
+        use exomonad_proto::effects::events::{address::Kind, Address as ProtoAddr};
         let addr = Address::from_proto(Some(ProtoAddr {
             kind: Some(Kind::Agent("".into())),
         }));

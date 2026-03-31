@@ -207,8 +207,17 @@ fn claude_spawn_flags(
     allowed_tools: Vec<String>,
     disallowed_tools: Vec<String>,
 ) -> ClaudeSpawnFlags {
+    use crate::domain::PermissionMode;
+    let mode = if permission_mode.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_value::<PermissionMode>(serde_json::Value::String(permission_mode))
+                .unwrap_or_default(),
+        )
+    };
     ClaudeSpawnFlags {
-        permission_mode: non_empty(permission_mode),
+        permission_mode: mode,
         allowed_tools,
         disallowed_tools,
     }

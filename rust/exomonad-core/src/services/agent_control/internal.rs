@@ -190,11 +190,11 @@ impl AgentControlService {
         let perms_flags = match agent_type {
             AgentType::Claude => {
                 let mut flags = String::new();
-                let mode = claude_flags.and_then(|f| f.permission_mode.as_deref());
+                let mode = claude_flags.and_then(|f| f.permission_mode.as_ref());
                 match mode {
                     Some(m) => {
                         flags.push_str(" --permission-mode ");
-                        flags.push_str(m);
+                        flags.push_str(m.as_str());
                     }
                     None => flags.push_str(" --dangerously-skip-permissions"),
                 }
@@ -472,7 +472,10 @@ impl AgentControlService {
 
         // Rebalance panes into a grid after each split to prevent
         // exponential height decay (60 → 29 → 14 → 6 → 2 → 1 lines).
-        if let Err(e) = tmux.select_layout(&target_window, "tiled").await {
+        if let Err(e) = tmux
+            .select_layout(&target_window, crate::domain::TmuxLayout::Tiled)
+            .await
+        {
             tracing::warn!(error = %e, "Failed to apply tiled layout (non-fatal)");
         }
 

@@ -85,13 +85,13 @@ pub enum DeliveryOutcome {
     /// Successfully delivered to the resolved recipient.
     Delivered {
         method: DeliveryMethod,
-        recipient: String,
+        recipient: crate::domain::AgentName,
     },
     /// Original target could not be resolved; fell back to team lead.
     FallbackToLead {
         method: DeliveryMethod,
         original: String,
-        lead: String,
+        lead: crate::domain::AgentName,
     },
     /// Delivery failed entirely.
     Failed { original: String, reason: String },
@@ -99,6 +99,7 @@ pub enum DeliveryOutcome {
 
 impl DeliveryOutcome {
     fn from_result(result: DeliveryResult, recipient: &str) -> Self {
+        let agent = crate::domain::AgentName::from(recipient);
         match result {
             DeliveryResult::Failed => DeliveryOutcome::Failed {
                 original: recipient.to_string(),
@@ -106,19 +107,19 @@ impl DeliveryOutcome {
             },
             DeliveryResult::Teams => DeliveryOutcome::Delivered {
                 method: DeliveryMethod::TeamsInbox,
-                recipient: recipient.to_string(),
+                recipient: agent,
             },
             DeliveryResult::Acp => DeliveryOutcome::Delivered {
                 method: DeliveryMethod::Acp,
-                recipient: recipient.to_string(),
+                recipient: agent,
             },
             DeliveryResult::Uds => DeliveryOutcome::Delivered {
                 method: DeliveryMethod::Uds,
-                recipient: recipient.to_string(),
+                recipient: agent,
             },
             DeliveryResult::Tmux => DeliveryOutcome::Delivered {
                 method: DeliveryMethod::Tmux,
-                recipient: recipient.to_string(),
+                recipient: agent,
             },
         }
     }
@@ -283,7 +284,7 @@ async fn resolve_and_deliver_to_lead(
         _ => DeliveryOutcome::FallbackToLead {
             method: delivery_method_from_result(result),
             original,
-            lead: lead_key,
+            lead: crate::domain::AgentName::from(lead_key.as_str()),
         },
     }
 }

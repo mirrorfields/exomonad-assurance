@@ -335,8 +335,8 @@ pub struct SpawnGeminiTeammateOptions {
 /// Claude-specific spawn flags for permission control.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeSpawnFlags {
-    /// Permission mode (e.g., "plan", "default"). None = --dangerously-skip-permissions.
-    pub permission_mode: Option<String>,
+    /// Permission mode. None = --dangerously-skip-permissions.
+    pub permission_mode: Option<crate::domain::PermissionMode>,
     /// Tool patterns to allow (e.g., "Read", "Grep").
     pub allowed_tools: Vec<String>,
     /// Tool patterns to disallow (e.g., "Bash").

@@ -4,11 +4,11 @@ use crate::services::acp_registry::AcpRegistry;
 use crate::services::agent_control::AgentType;
 use crate::services::agent_resolver::AgentResolver;
 use crate::services::event_queue::EventQueue;
-use crate::services::github::{GitHubClient, map_octo_err};
+use crate::services::github::{map_octo_err, GitHubClient};
 use crate::services::repo;
 use anyhow::Result;
 use claude_teams_bridge::TeamRegistry;
-use exomonad_proto::effects::events::{AgentMessage, Event, event::EventType};
+use exomonad_proto::effects::events::{event::EventType, AgentMessage, Event};
 use octocrab::params;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -1311,11 +1311,9 @@ mod tests {
                 ..
             }
         )));
-        assert!(
-            actions.iter().any(
-                |a| matches!(a, PendingAction::EmitEvent { status, .. } if status == "failure")
-            )
-        );
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, PendingAction::EmitEvent { status, .. } if status == "failure")));
         assert_eq!(state.last_ci_status, CIStatus::Failure);
     }
 
