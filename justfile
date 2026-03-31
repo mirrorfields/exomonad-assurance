@@ -176,6 +176,10 @@ e2e-messaging:
 e2e-hook-rewrite:
     ./tests/e2e/hook-rewrite/run.sh
 
+# Run live E2E Teams messaging test (requires active CC team "teams-e2e")
+live-teams-e2e:
+    cargo test -p claude-teams-bridge --test integration -- live_teams_e2e --ignored --nocapture
+
 # Validate Gemini settings against schema
 validate-settings:
     nix-shell -p python3Packages.jsonschema --run "python3 scripts/validate_json.py .gemini/settings.json schema/gemini-cli/settings.schema.json"
