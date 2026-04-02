@@ -137,13 +137,13 @@ Post-merge, the Haskell tool handler runs `git pull` via `process.run` to fast-f
 
 ## Delivery Pipeline (`services/delivery.rs`)
 
-Two abstraction levels — choose the right one:
+All delivery functions are generic over `ctx: &(impl Has* + ...)` — no concrete `Services` type:
 
-| Function | When to use |
-|----------|-------------|
-| `route_message()` | Typed Address routing: resolves `Agent`, `Team` (with lead resolution), `Supervisor` → `deliver_to_agent()` |
-| `notify_parent_delivery()` | Notifying a parent agent (OTel span events, EventQueue, `[from: id]`/`[FAILED: id]` prefix) |
-| `deliver_to_agent()` | Low-level: peer messaging, sibling notifications, injecting into agent panes |
+| Function | Bounds | When to use |
+|----------|--------|-------------|
+| `route_message()` | `HasTeamRegistry + HasAcpRegistry + HasAgentResolver + HasProjectDir` | Typed Address routing: resolves `Agent`, `Team`, `Supervisor` → `deliver_to_agent()` |
+| `notify_parent_delivery()` | `HasTeamRegistry + HasAcpRegistry + HasEventLog + HasEventQueue + HasProjectDir` | Notifying a parent agent (OTel span events, EventQueue, `[from: id]`/`[FAILED: id]` prefix) |
+| `deliver_to_agent()` | `HasTeamRegistry + HasAcpRegistry + HasProjectDir` | Low-level: peer messaging, sibling notifications, injecting into agent panes |
 
 Both the `notify_parent` effect handler and the poller's `NotifyParentAction` use `notify_parent_delivery()`. All messages get `[from: id]` prefix (or `[FAILED: id]` for failures). Event handler messages include structural tags inside the body (e.g. `[from: leaf-id] [PR READY] PR #5...`). Never use raw `deliver_to_agent()` for parent notifications.
 
