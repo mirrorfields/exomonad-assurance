@@ -14,15 +14,17 @@ use std::sync::Arc;
 /// Handles all effects in the `fs.*` namespace by delegating to
 /// the generated `dispatch_filesystem_effect` function.
 pub struct FsHandler<C> {
-    #[allow(dead_code)]
-    ctx: Arc<C>,
     service: FileSystemService,
+    _ctx: std::marker::PhantomData<C>,
 }
 
 impl<C: HasProjectDir> FsHandler<C> {
     pub fn new(ctx: Arc<C>) -> Self {
         let service = FileSystemService::new(ctx.project_dir().to_path_buf());
-        Self { ctx, service }
+        Self {
+            service,
+            _ctx: std::marker::PhantomData,
+        }
     }
 }
 
