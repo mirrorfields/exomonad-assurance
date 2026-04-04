@@ -1169,6 +1169,7 @@ dependencies = [
  "chrono",
  "clap",
  "claude-teams-bridge",
+ "dirs 5.0.1",
  "duct",
  "exomonad-core",
  "exomonad-proto",

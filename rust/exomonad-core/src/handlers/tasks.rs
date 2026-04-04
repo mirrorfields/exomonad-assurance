@@ -2,22 +2,20 @@ use crate::effects::{dispatch_tasks_effect, EffectResult, ResultExt, TasksEffect
 use async_trait::async_trait;
 use exomonad_proto::effects::tasks::*;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::fs;
 use tracing::info;
 
-use crate::services::HasTeamRegistry;
+use crate::services::{HasTasksDir, HasTeamRegistry};
 
 pub struct TasksHandler<C> {
-    tasks_dir: PathBuf,
     ctx: Arc<C>,
 }
 
-impl<C: HasTeamRegistry + 'static> TasksHandler<C> {
-    pub fn new(tasks_dir: PathBuf, ctx: Arc<C>) -> Self {
-        Self { tasks_dir, ctx }
+impl<C: HasTeamRegistry + HasTasksDir + 'static> TasksHandler<C> {
+    pub fn new(ctx: Arc<C>) -> Self {
+        Self { ctx }
     }
 
     async fn resolve_team(
@@ -87,7 +85,7 @@ fn parse_task(task_val: &serde_json::Value) -> Task {
 }
 
 #[async_trait]
-impl<C: HasTeamRegistry + 'static> crate::effects::EffectHandler for TasksHandler<C> {
+impl<C: HasTeamRegistry + HasTasksDir + 'static> crate::effects::EffectHandler for TasksHandler<C> {
     fn namespace(&self) -> &str {
         "tasks"
     }
@@ -103,7 +101,7 @@ impl<C: HasTeamRegistry + 'static> crate::effects::EffectHandler for TasksHandle
 }
 
 #[async_trait]
-impl<C: HasTeamRegistry + 'static> TasksEffects for TasksHandler<C> {
+impl<C: HasTeamRegistry + HasTasksDir + 'static> TasksEffects for TasksHandler<C> {
     async fn list_tasks(
         &self,
         req: ListTasksRequest,
@@ -116,7 +114,7 @@ impl<C: HasTeamRegistry + 'static> TasksEffects for TasksHandler<C> {
                 crate::effects::EffectError::invalid_input("Could not resolve team name")
             })?;
 
-        let team_dir = self.tasks_dir.join(&team_name);
+        let team_dir = self.ctx.tasks_dir().join(&team_name);
         if fs::metadata(&team_dir).await.is_err() {
             return Ok(ListTasksResponse { tasks: vec![] });
         }
@@ -162,7 +160,8 @@ impl<C: HasTeamRegistry + 'static> TasksEffects for TasksHandler<C> {
             })?;
 
         let task_path = self
-            .tasks_dir
+            .ctx
+            .tasks_dir()
             .join(&team_name)
             .join(format!("{}.json", req.task_id));
         if fs::metadata(&task_path).await.is_err() {
@@ -195,7 +194,7 @@ impl<C: HasTeamRegistry + 'static> TasksEffects for TasksHandler<C> {
                 crate::effects::EffectError::invalid_input("Could not resolve team name")
             })?;
 
-        let team_dir = self.tasks_dir.join(&team_name);
+        let team_dir = self.ctx.tasks_dir().join(&team_name);
         let task_path = team_dir.join(format!("{}.json", req.task_id));
         if fs::metadata(&task_path).await.is_err() {
             return Ok(UpdateTaskResponse {
@@ -244,8 +243,33 @@ mod tests {
     use super::*;
     use crate::domain::{AgentName, BirthBranch};
     use crate::effects::{EffectContext, TasksEffects};
-    use crate::services::Services;
+    use crate::services::{HasTasksDir, Services};
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
+
+    struct TestCtx {
+        tasks_dir: PathBuf,
+        services: Services,
+    }
+
+    impl HasTasksDir for TestCtx {
+        fn tasks_dir(&self) -> &Path {
+            &self.tasks_dir
+        }
+    }
+
+    impl HasTeamRegistry for TestCtx {
+        fn team_registry(&self) -> &crate::services::TeamRegistry {
+            self.services.team_registry()
+        }
+    }
+
+    fn make_handler(tasks_dir: &Path) -> TasksHandler<TestCtx> {
+        TasksHandler::new(Arc::new(TestCtx {
+            tasks_dir: tasks_dir.to_path_buf(),
+            services: Services::test(),
+        }))
+    }
 
     fn test_ctx() -> EffectContext {
         EffectContext {
@@ -258,8 +282,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_tasks_empty() {
         let tmp = tempdir().unwrap();
-        let services = Arc::new(Services::test());
-        let handler = TasksHandler::new(tmp.path().to_path_buf(), services);
+        let handler = make_handler(tmp.path());
         let ctx = test_ctx();
 
         let req = ListTasksRequest {
@@ -274,8 +297,7 @@ mod tests {
     #[tokio::test]
     async fn test_tasks_lifecycle() {
         let tmp = tempdir().unwrap();
-        let tasks_dir = tmp.path().to_path_buf();
-        let team_dir = tasks_dir.join("my-team");
+        let team_dir = tmp.path().join("my-team");
         fs::create_dir_all(&team_dir).await.unwrap();
 
         let task_json = r#"{
@@ -289,8 +311,7 @@ mod tests {
         }"#;
         fs::write(team_dir.join("1.json"), task_json).await.unwrap();
 
-        let services = Arc::new(Services::test());
-        let handler = TasksHandler::new(tasks_dir, services);
+        let handler = make_handler(tmp.path());
         let ctx = test_ctx();
 
         // List

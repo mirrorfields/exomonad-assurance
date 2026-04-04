@@ -43,7 +43,7 @@ pub use self::github::GitHubClient;
 pub use self::mutex_registry::MutexRegistry;
 pub use self::secrets::Secrets;
 pub use self::supervisor_registry::SupervisorRegistry;
-use claude_teams_bridge::TeamRegistry;
+pub use claude_teams_bridge::TeamRegistry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -85,6 +85,9 @@ pub trait HasGitHubClient: Send + Sync {
 pub trait HasGitWorktreeService: Send + Sync {
     fn git_worktree_service(&self) -> &Arc<GitWorktreeService>;
 }
+pub trait HasTasksDir: Send + Sync {
+    fn tasks_dir(&self) -> &std::path::Path;
+}
 
 // ============================================================================
 // Services — the concrete type that implements all traits
@@ -97,6 +100,7 @@ pub trait HasGitWorktreeService: Send + Sync {
 #[derive(Clone)]
 pub struct Services {
     pub project_dir: PathBuf,
+    pub tasks_dir: PathBuf,
     pub github_client: Option<Arc<GitHubClient>>,
     pub event_log: Option<Arc<EventLog>>,
     pub team_registry: Arc<TeamRegistry>,
@@ -164,6 +168,11 @@ impl HasGitWorktreeService for Services {
         &self.git_wt
     }
 }
+impl HasTasksDir for Services {
+    fn tasks_dir(&self) -> &std::path::Path {
+        &self.tasks_dir
+    }
+}
 
 #[cfg(test)]
 impl Services {
@@ -171,6 +180,7 @@ impl Services {
     pub fn test() -> Self {
         Self {
             project_dir: PathBuf::from("."),
+            tasks_dir: PathBuf::from(".claude/tasks"),
             github_client: None,
             event_log: None,
             team_registry: Arc::new(TeamRegistry::new()),

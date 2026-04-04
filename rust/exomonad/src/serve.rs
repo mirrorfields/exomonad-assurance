@@ -914,8 +914,12 @@ Run `exomonad recompile` first to build it.",
         Arc::new(exomonad_core::services::claude_session_registry::ClaudeSessionRegistry::new());
 
     // Build Services once — all shared registries in one struct
+    let tasks_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claude/tasks");
     let services = Arc::new(exomonad_core::services::Services {
         project_dir: project_dir.clone(),
+        tasks_dir,
         github_client: github_client.clone(),
         event_log: event_log.clone(),
         team_registry: team_registry.clone(),

@@ -55,6 +55,7 @@ Handlers and delivery functions are generic over a context `C` bounded by capabi
 | `HasMutexRegistry` | `&MutexRegistry` |
 | `HasGitHubClient` | `Option<&Arc<GitHubClient>>` |
 | `HasGitWorktreeService` | `&Arc<GitWorktreeService>` |
+| `HasTasksDir` | `&Path` |
 
 **Handler pattern** — each handler is `Handler<C>` with `Arc<C>`:
 ```rust

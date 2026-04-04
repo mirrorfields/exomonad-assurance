@@ -51,13 +51,11 @@ pub fn orchestration_handlers(
     services: Arc<Services>,
     event_queue_scope: Option<String>,
 ) -> Vec<Box<dyn EffectHandler>> {
-    let tasks_dir = dirs::home_dir().unwrap_or_default().join(".claude/tasks");
-
     vec![
         Box::new(AgentHandler::new(agent_control, services.clone())),
         Box::new(EventHandler::new(services.clone(), event_queue_scope)),
         Box::new(SessionHandler::new(services.clone())),
-        Box::new(TasksHandler::new(tasks_dir, services.clone())),
+        Box::new(TasksHandler::new(services.clone())),
         Box::new(CoordinationHandler::new(services)),
     ]
 }
